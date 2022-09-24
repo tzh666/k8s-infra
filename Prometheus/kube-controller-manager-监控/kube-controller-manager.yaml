@@ -1,0 +1,32 @@
+apiVersion: v1   
+kind: Endpoints
+metadata:
+  labels:
+    k8s-app: kube-controller-manager
+  name: kube-controller-manage-monitor
+  namespace: kube-system
+subsets:
+  - addresses:
+    - ip: 192.168.1.110  # 改成master01宿主机的ip
+    - ip: 192.168.1.111  # 改成master02宿主机的ip
+    - ip: 192.168.1.112  # 改成master03宿主机的ip
+    ports:
+    - name: http-metrics
+      port: 10252
+      protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    k8s-app: kube-controller-manager
+  name: kube-controller-manage-monitor
+  namespace: kube-system 
+spec:
+  ports:
+  - name: http-metrics
+    port: 10252
+    protocol: TCP
+    targetPort: 10252
+  sessionAffinity: None
+  type: ClusterIP

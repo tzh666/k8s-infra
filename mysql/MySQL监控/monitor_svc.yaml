@@ -1,0 +1,21 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: mysql-exporter
+  namespace: monitoring
+  labels:
+    k8s-app: mysql-exporter
+    namespace: monitoring
+spec: 
+  jobLabel: k8s-app
+  endpoints:
+  - port: api        # mysql-exporter的svc port name, 也可以写端口号,但是不方便维护,后期改端口号 此处不需要修改
+    interval: 30s    # 检测时间间隔
+    scheme: http     # 协议
+  selector:
+    matchLabels:
+      k8s-app: mysql-exporter
+  namespaceSelector:
+    matchNames:
+    - monitoring
+  
