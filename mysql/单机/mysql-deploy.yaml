@@ -55,7 +55,7 @@ spec:
               - /bin/sh
               - "-c"
               - MYSQL_PWD="${MYSQL_ROOT_PASSWORD}"
-              - mysql -hlocalhost -uroot -p'centos' -e "SELECT 1"
+              - mysql -hlocalhost -uroot -p'$MYSQL_PWD' -e "SELECT 1"   # 没验证过
           initialDelaySeconds: 5
           periodSeconds: 2
           timeoutSeconds: 1
