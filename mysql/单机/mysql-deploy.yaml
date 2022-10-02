@@ -23,7 +23,6 @@ spec:
       containers:
       - name: mysql
         image: mysql:5.7
-        imagePullPolicy: IfNotPresent
         args:  # 新版本镜像有更新，需要使用下面的认证插件环境变量配置才会生效
         - --default_authentication_plugin=mysql_native_password
         - --character-set-server=utf8mb4
@@ -37,6 +36,29 @@ spec:
             mountPath: /etc/mysql/conf.d/mysqld.cnf      # 挂载到容器内的目录,这写全路径否则还是会覆盖
             subPath: mysqld.cnf                          # 不会覆盖掉原本的路径下的文件，subpath的值必须是configMap中data下的key值
         imagePullPolicy: IfNotPresent
+        resources:                                       # QoS 最高等级
+          limits:
+            cpu: 200m
+            memory: 200Mi
+          requests:
+            cpu: 200m
+            memory: 200Mi
+        livenessProbe:
+          exec:
+            command: ["mysqladmin", "ping"]
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+        readinessProbe:
+          exec:
+            command:
+              - /bin/sh
+              - "-c"
+              - MYSQL_PWD="${MYSQL_ROOT_PASSWORD}"
+              - mysql -hlocalhost -uroot -p'centos' -e "SELECT 1"
+          initialDelaySeconds: 5
+          periodSeconds: 2
+          timeoutSeconds: 1
         ports:
         - containerPort: 3306
           name: dbport               # 起个名字,svc可以使用这个名字关联后端pod的端口,更改端口就不需要更改svc
