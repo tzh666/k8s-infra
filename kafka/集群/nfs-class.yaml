@@ -1,0 +1,7 @@
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: infra-nfs-kafka
+provisioner: fuseim.pri/ifs
+parameters:
+  archiveOnDelete: "false"   # 设置为"false"时删除PVC不会保留数据,"true"则保留数据
