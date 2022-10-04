@@ -1,0 +1,11 @@
+apiVersion: policy/v1beta1
+kind: PodDisruptionBudget
+metadata:
+  name: zk-infra-pdb
+  namespace: infra
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: zookeeper    
+  minAvailable: 2     # 滚动更新的时候至少保留2个pod,防止宕机
+  
