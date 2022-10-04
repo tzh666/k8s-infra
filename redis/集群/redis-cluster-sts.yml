@@ -1,0 +1,72 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  namespace: infra
+  name: redis-cluster
+spec:
+  serviceName: redis-cluster
+  replicas: 6
+  selector:
+    matchLabels:
+      app: redis-cluster
+  template:
+    metadata:
+      labels:
+        app: redis-cluster
+    spec:
+      affinity:
+        nodeAffinity:                                      # node亲和性
+          requiredDuringSchedulingIgnoredDuringExecution:  # 硬策略,调度在app.kubernetes.io/component=zookeeper的节点中
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: In
+                values:
+                  - zookeeper
+        podAntiAffinity:                                    # Pod反亲和性
+          preferredDuringSchedulingIgnoredDuringExecution:  # 软策略,使Pod分布在不同的节点上
+          - weight: 1                                       # 权重,有多个策略通过权重控制调度
+            podAffinityTerm:
+              topologyKey: app.kubernetes.io/name           # 通过app.kubernetes.io/name作为域调度  
+              labelSelector:
+                matchExpressions:
+                - key: app.kubernetes.io/component
+                  operator: In
+                  values:
+                  - zookeeper
+      containers:
+      - name: redis
+        image: redis:5.0.13
+        ports:
+        - containerPort: 6379
+          name: client
+        - containerPort: 16379
+          name: gossip
+        command: ["/etc/redis/fix-ip.sh", "redis-server", "/etc/redis/redis.conf"]
+        env:
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        volumeMounts:
+        - name: conf
+          mountPath: /etc/redis/
+          readOnly: false
+        - name: redis-data
+          mountPath: /data
+          readOnly: false
+      volumes:
+      - name: conf
+        configMap:
+          name: redis-cluster
+          defaultMode: 0755
+  volumeClaimTemplates:
+  - metadata:
+      name: redis-data
+    spec:
+      storageClassName: infra-nfs-redis
+      accessModes:
+        - ReadWriteMany
+      resources:
+        requests:
+          storage: 5Gi
