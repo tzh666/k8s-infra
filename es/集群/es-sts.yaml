@@ -1,0 +1,97 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: es-test
+  namespace: infra
+spec:
+  serviceName: es7
+  replicas: 3
+  selector:
+    matchLabels:
+      app: es7
+  template:
+    metadata:
+      labels:
+        app: es7
+    spec:
+      affinity:
+        nodeAffinity:                                      # node亲和性
+          requiredDuringSchedulingIgnoredDuringExecution:  # 硬策略,调度在app.kubernetes.io/component=zookeeper的节点中
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: esname
+                operator: In
+                values:
+                  - elasticsearch
+        podAntiAffinity:                                    # Pod反亲和性
+          preferredDuringSchedulingIgnoredDuringExecution:  # 软策略,使Pod分布在不同的节点上
+          - weight: 1                                       # 权重,有多个策略通过权重控制调度
+            podAffinityTerm:
+              topologyKey: esname                           # 通过app.kubernetes.io/name作为域调度  
+              labelSelector:
+                matchExpressions:
+                - key: esname
+                  operator: In
+                  values:
+                  - elasticsearch
+      containers:
+      - name: es7
+        image: elasticsearch:7.16.2
+        resources:
+            limits:
+              cpu: 1000m
+            requests:
+              cpu: 100m
+        ports:
+        - containerPort: 9200
+          name: rest
+          protocol: TCP
+        - containerPort: 9300
+          name: inter-node
+          protocol: TCP
+        volumeMounts:
+        - name: data
+          mountPath: /usr/share/elasticsearch/data
+        env:
+          - name: cluster.name
+            value: k8s-logs
+          - name: node.name
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.name
+          - name: discovery.zen.minimum_master_nodes
+            value: "2"
+          # es 集群地址 podname.svcname
+          - name: discovery.seed_hosts
+            value: "es-test-0.es7,es-test-1.es7,es-test-2.es7"
+          # es 名字
+          - name: cluster.initial_master_nodes
+            value: "es-test-0,es-test-1,es-test-2"
+          - name: ES_JAVA_OPTS
+            value: "-Xms1g -Xmx1g"
+      initContainers:
+      - name: fix-permissions
+        image: busybox
+        command: ["sh", "-c", "chown -R 1000:1000 /usr/share/elasticsearch/data"]
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - name: data
+          mountPath: /usr/share/elasticsearch/data
+      - name: increase-vm-max-map
+        image: busybox
+        command: ["sysctl", "-w", "vm.max_map_count=262144"]
+        securityContext:
+          privileged: true
+      - name: increase-fd-ulimit
+        image: busybox
+        command: ["sh", "-c", "ulimit -n 65536"]
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      storageClassName: infra-es-sc
+      resources:
+        requests:
+          storage: 1Gi
