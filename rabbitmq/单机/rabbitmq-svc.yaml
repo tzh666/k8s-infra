@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: rabbitmq
+  namespace: infra
+spec:
+  ports:
+  - name: web
+    port: 5672
+    protocol: TCP
+    targetPort: 5672
+  - name: http
+    port: 15672
+    protocol: TCP
+    targetPort: 15672
+  selector:
+    app: rabbitmq
+  sessionAffinity: ClientIP
+  type: NodePort
