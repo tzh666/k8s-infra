@@ -1,6 +1,6 @@
 #!/bin/bash
 # 文件推送到git脚本
-git add --all
+git add .
 
 git commit -m $1
 
