@@ -185,7 +185,6 @@ spec:
   - apiVersion: v1
     kind: PersistentVolumeClaim
     metadata:
-      creationTimestamp: null
       name: datadir
     spec:
       accessModes:
