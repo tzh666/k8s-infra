@@ -18,7 +18,7 @@ logstashPipeline:
   logstash.conf: |
     input { kafka { bootstrap_servers => "kafka-0.kafka-headless.logging.svc.cluster.local:9092" codec => json consumer_threads => 3 topics => ["messages"] } }
     filter {}  # 过滤配置（比如可以删除key、添加geoip等等）
-    output { elasticsearch { hosts => [ "elasticsearch-client:9200" ] user => "elastic" password => "ydzsio321" index => "logstash-k8s-%{+YYYY.MM.dd}" } stdout { codec => rubydebug } }
+    output { elasticsearch { hosts => [ "elasticsearch-client:9200" ] user => "elastic" password => "qwe123456" index => "logstash-k8s-%{+YYYY.MM.dd}" } stdout { codec => rubydebug } }
 
 volumeClaimTemplate:
   accessModes: ["ReadWriteOnce"]

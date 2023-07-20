@@ -1,0 +1,15 @@
+# 业务java环境base镜像, 把agent copy到base镜像中
+# 等做业务镜像再定制一些其他的功能
+FROM fabric8/java-alpine-openjdk8-jre:1.9.0
+
+# 时区设置
+RUN set -x && \
+    ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime && \
+    mkdir -p /app/skywalking 
+
+ENV SKYWALKING_OPTS=""
+
+WORKDIR /app
+
+# 8.13版本的agent
+COPY skywalking-agent.jar  /app/skywalking/skywalking-agent.jar

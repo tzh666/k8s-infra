@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: zkui
+  name: zkui
+  namespace: skywalking
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: zkui
+  template:
+    metadata:
+      labels:
+        app: zkui
+    spec:
+      nodeSelector:
+        app: zkui
+      containers:
+        - image: mqui:v4
+          #command: [ "/bin/sh", "-c", "ls /app && sleep 36000" ]
+          imagePullPolicy: IfNotPresent   # 优先从本地获取镜像，如果不存在则从仓库拉取；
+          name: zkui
+          ports:
+          - containerPort: 8080
+            name: zkui-port
+            protocol: TCP
+          volumeMounts:
+          - name: zkuiconf
+            mountPath: /app/config.cfg
+            subPath: config.cfg
+          env:
+            - name: JAVA_OPTS
+              value: "-Drocketmq.namesrv.addr=192.168.1.22:9876 -Dcom.rocketmq.sendMessageWithVIPChannel=false"
+            - name: SKYWALKING_OPTS
+              value: "-javaagent:/app/skywalking/skywalking-agent.jar -Dskywalking.agent.service_name=zkui -Dskywalking.collector.backend_service=192.168.1.20:31694"
+            - name: SW_LOGGING_LEVEL
+              value: "DEBUG"
+            - name: SW_LOGGING_OUTPUT
+              value: "CONSOLE"
+      volumes:
+      - name: zkuiconf
+        configMap:
+          name: zkui-conf
+          items:
+          - key: config.cfg
+            path: config.cfg
+          
