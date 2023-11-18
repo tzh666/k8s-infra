@@ -1,0 +1,1224 @@
+#/bin/bash
+# 本脚本针对RedHat6、CentOS6静默安装Oracle 11g RAC初始化系统参数用
+# 本脚本只适用于新安装系统的初始化，已经在使用或者有调整系统参数的禁止使用！！！！！
+# 注意：本脚本会覆盖hosts设置
+
+################################### 已验证 Linux 发行版 ###################################
+# Red Hat Enterprise Linux Server release 6.10.x86_64 (Santiago)
+# Oracle Linux 7.5 x86_64
+
+################################### 请根据自己实际情况修改变量 ###################################
+rac1HostName=rac1
+rac2HostName=rac2
+rac1PlublicIP=192.168.1.30
+rac2PlublicIP=192.168.1.31
+rac1VIP=192.168.1.32
+rac2VIP=192.168.1.33
+scanIP1=192.168.1.34
+scanIP2=192.168.1.35
+scanIP3=192.168.1.36
+rac1PrivIP=10.10.1.10
+rac2PrivIP=10.10.1.11
+# Oracle用户密码
+oraclePasswd=oracle
+# GRID用户密码
+gridPasswd=grid
+
+#安装过程中所有用户的密码
+monitorPassword=oracle
+
+#SCAN名称
+scname=rac-scan
+#集群名称
+clusterName=rac
+#解析域名名称
+dnsname=oracle.org
+
+#裁决盘名称
+diskGroup_name=OCR
+#表决盘冗余选项（接受以下3个选项）
+# HIGH            高冗余：最少5块磁盘，Oracle ASM默认提供三重镜像。可以容忍在不同故障组中丢失两个Oracle ASM磁盘。
+# NORMAL        正常冗余：最少3块磁盘，Oracle ASM默认提供双向镜像，这意味着镜像所有文件，以便每个范围有两个副本。容许丢失一个磁盘。
+# EXTERNAL        外部冗余：最少1块盘，由外部RAID提供冗余。
+diskGroup_redundancy=NORMAL
+#裁决盘所使用磁盘有那些
+disks=/dev/asmdiskb,/dev/asmdiskc,/dev/asmdiskd  
+#磁盘组的路径
+diskDiscoveryString=/dev/asm*
+#数据磁盘组的名称
+datadiskgroupname=DATAVG
+
+#oracle安装软件存放目录
+OracleSoft=/soft
+
+# grid and oracle 根目录
+GridOracleHomeTemp=/u01
+
+# grid实例名称（节点1为：“名称1”，节点2为：“名称2”）
+GRID_SIDTemp=+ASM
+
+# 安装grid时候的：Oracle Base
+GRID_BASETemp=/u01/app/grid
+
+# 安装grid时候的：Software Location
+GRID_HOMETemp=/u01/app/11.2.0/grid
+
+# 安装database时候的：Oracle Base
+ORACLE_BASETemp=/u01/app/oracle
+# 安装database时候的：Oracle home
+ORACLE_HOMETemp=/u01/app/oracle/product/11.2.0/db
+# 数据库名称
+ORACLE_UNQNAMETemp=orcl
+
+# 数据库实例名称（节点1实例名称为：orcl1，节点2为：orcl2）
+ORACLE_SIDTemp=orcl
+
+################################### 请根据自己实际情况修改变量 ###################################
+
+
+# 检查当前用户是否为root权限
+if [ `id -u` -eq 0 ];then
+    echo "当前用户是root用户，将继续安装!"
+else
+    echo "非root用户!"
+    exit 0
+fi
+
+# 输出提示，是否已设置静态IP并挂载光驱
+echo
+read -p "请确认您已经将PlublicIP设置为静态IP并已挂载Linux安装光盘.按Enter键开始,Ctrl+C退出" tempchar
+echo
+
+# 请选择你的系统版本（RedHat6或者Redhat7）
+read -p "系统版本为：6 or 7：" LinuxVer
+if [ ${LinuxVer} -eq 6 ]
+then
+    echo "您选择的系统是Linux发行版：6"
+elif [ ${LinuxVer} -eq 7 ]
+then
+    echo "您选择的系统是Linux发行版：7"
+else
+    echo "输入错误，程序将推出"
+    exit
+fi
+
+
+# 选择当前节点（此脚本只支持双节点安装RAC）
+read -p "当前节点为1 or 2：" nodeNum
+if [ $nodeNum -eq 1 ]
+then
+    echo "当前服务器为：节点1"
+    hostname=${rac1HostName}
+    racPlublicip=${rac1PlublicIP}
+    racVIP=${rac1VIP}
+elif [ $nodeNum -eq 2 ]
+then
+    echo "当前服务器为：节点2"
+    hostname=${rac2HostName}
+    racPlublicip=${rac2PlublicIP}
+    racVIP=${rac2VIP}
+else
+    echo -e "\033[31m节点选择错误\033[0m"
+    exit
+fi
+
+####################################################################################
+#关闭SELinux
+####################################################################################
+
+grep "SELINUX=disabled" /etc/selinux/config > /dev/null 2>&1
+if [ $? -eq 0 ]
+then
+    echo "SElinux本身就是关闭状态"
+    setenforce 0
+else
+    sed -i 's/SELINUX=enforcing/SELINUX=disabled/' /etc/selinux/config
+    [ $? -eq 0 ] && echo "关闭SELinux - Success" || echo -e "\033[31m关闭SELinux----------Failed\033[0m"
+    setenforce 0
+fi
+####################################################################################
+#关闭iptables和firewalld（需要区分6和7）
+####################################################################################
+
+if [ ${LinuxVer} -eq 6 ]
+then
+    service iptables stop
+    chkconfig iptables off
+    [ $? -eq 0 ] && echo "禁止iptables开机自动启动 - Success" || echo -e "\033[31m禁止iptables开机自动启动----------Failed\033[0m"
+else
+    systemctl stop firewalld
+    systemctl disable firewalld
+    [ $? -eq 0 ] && echo "禁止firewalld开机自动启动 - Success" || echo -e "\033[31m禁止firewalld开机自动启动----------Failed\033[0m"
+    systemctl stop iptables
+    systemctl disable iptables
+    [ $? -eq 0 ] && echo "禁止iptables开机自动启动 - Success" || echo -e "\033[31m禁止iptables开机自动启动----------Failed\033[0m"
+fi
+####################################################################################
+#修改主机名（需要区分6和7）
+####################################################################################
+
+if [ ${LinuxVer} -eq 6 ]
+then
+    hostname ${hostname}
+    sed -i "/HOSTNAME=/c HOSTNAME=${hostname}" /etc/sysconfig/network
+    [ $? -eq 0 ] && echo "修改主机名 - Success" || echo -e "\033[31m修改主机名----------Failed\033[0m"
+else
+    hostnamectl set-hostname ${hostname}
+    [ $? -eq 0 ] && echo "修改主机名 - Success" || echo -e "\033[31m修改主机名----------Failed\033[0m"
+fi
+
+####################################################################################
+#禁用ntpd,Oracle会自动启用自己的ctssd来进行时间同步（需要区分6和7）
+####################################################################################
+
+if [ ${LinuxVer} -eq 6 ]
+then
+    service ntpd stop
+    chkconfig ntpd off
+    [ $? -eq 0 ] && echo "禁止ntp开机自动启动 - Success" || echo -e "\033[31m禁止ntp开机自动启动----------Failed\033[0m"
+    # mv /etc/ntp.conf /etc/ntp.conf.bak > /dev/null 2>&1
+else
+    systemctl stop ntpd
+    systemctl disable ntpd
+    [ $? -eq 0 ] && echo "禁止ntp开机自动启动 - Success" || echo -e "\033[31m禁止ntp开机自动启动----------Failed\033[0m"
+    # mv /etc/ntp.conf /etc/ntp.conf.bak > /dev/null 2>&1
+fi
+
+####################################################################################
+#创建所需要的账户和组
+####################################################################################
+
+
+#Add oracle user. If present ,do nothing but create the mandatory groups
+#添加oracle用户。 如果存在，除了创建必需组之外什么也不做
+
+USERID="54321"
+GROUPID="54321"
+
+# 6.1.检查GROUPID是否被占用
+groupnum=`cat /etc/group | sort -t: -g +2 -3 | grep -v nfsnobody | cut -f3 -d":" | tail -1`
+if [ "${groupnum}" -ge "${GROUPID}" ]; then
+    GROUPID=`expr $groupnum + 1`
+fi
+
+# 6.2.检查USERID是否被占用
+usernum=`cat /etc/passwd | sort -t: -g +2 -3 | grep -v nfsnobody | cut -f3 -d":" | tail -1`
+if [ "${usernum}" -ge "${USERID}" ]; then
+    USERID=`expr $usernum + 1`
+fi
+
+# 6.3.创建oinstall组
+/bin/grep "^oinstall" /etc/group > /dev/null 2>&1
+if [ $? -eq 0 ]; then
+    echo "Group oinstall - 已经存在"
+else
+    echo "Adding group oinstall with gid ${GROUPID}"
+    /usr/sbin/groupadd -g ${GROUPID} oinstall
+fi
+
+# 6.4.创建dba组
+/bin/grep "^dba" /etc/group > /dev/null 2>&1
+if [ $? -eq 0 ]; then
+    echo "Group dba - 已经存在"
+else
+    echo "Adding group dba"
+    /usr/sbin/groupadd dba
+fi
+
+# 6.5.创建oper组 add by 6
+/bin/grep "^oper" /etc/group > /dev/null 2>&1
+if [ $? -eq 0 ]; then
+    echo "Group oper - 已经存在"
+else
+    echo "Adding group oper"
+    /usr/sbin/groupadd oper
+fi
+
+# 6.6.创建asmdba组 add by 6
+/bin/grep "^asmdba" /etc/group > /dev/null 2>&1
+if [ $? -eq 0 ]; then
+    echo "Group asmdba - 已经存在"
+else
+    echo "Adding group asmdba"
+    /usr/sbin/groupadd asmdba
+fi
+
+# 6.7.创建asmadmin组 add by 6
+/bin/grep "^asmadmin" /etc/group > /dev/null 2>&1
+if [ $? -eq 0 ]; then
+    echo "Group asmadmin - 已经存在"
+else
+    echo "Adding group asmadmin"
+    /usr/sbin/groupadd asmadmin
+fi
+
+# 6.8.创建asmoper组 add by 6
+/bin/grep "^asmoper" /etc/group > /dev/null 2>&1
+if [ $? -eq 0 ]; then
+    echo "Group asmoper - 已经存在"
+else
+    echo "Adding group asmoper"
+    /usr/sbin/groupadd asmoper
+fi
+
+# 6.9.创建oracle账户，如果已有oracle账号，将自动为该账号设置密码。
+/bin/grep "^oracle:" /etc/passwd   > /dev/null 2>&1
+if [ $? -ne 0 ]; then
+    echo "Adding user oracle with user id ${USERID}, initial login group oinstall, supplementary group asmadmin,asmdba,dba,oper and  home directory /home/oracle"
+    /usr/sbin/useradd -u ${USERID} -g oinstall -G asmadmin,asmdba,dba,oper -d /home/oracle oracle
+    if [ "$?" -eq "0" ]; then
+        echo "Changing ownership of /home/oracle to oracle:oinstall"
+        /bin/chown oracle:oinstall /home/oracle
+    else
+        echo -e "\033[31m创建oracle用户失败----------Failed\033[0m"
+    fi
+else
+    echo "用户oracle已经存在"
+fi
+
+# 6.10.创建grid账户 如果已有grid账号，将自动为该账号设置密码。add by 6
+/bin/grep "^grid:" /etc/passwd > /dev/null 2>&1
+if [ $? -ne 0 ]; then
+    #Add the user - password is disabled for grid user.
+    #添加用户 - 并自动为grid用户设置密码。
+    echo "Adding user grid with user id ${USERID}, initial login group oinstall, supplementary group asmadmin,asmdba,asmoper,dba and  home directory /home/grid"
+    /usr/sbin/useradd -u `expr ${USERID} + 1` -g oinstall -G asmadmin,asmdba,asmoper,dba -d /home/grid grid
+    if [ "$?" -eq "0" ]; then
+        echo "Changing ownership of /home/grid to grid:oinstall"
+        /bin/chown grid:oinstall /home/grid
+    else    
+        echo -e "\033[31m创建grid用户失败----------Failed\033[0m"
+    fi
+else
+    echo "用户grid已经存在"
+fi
+
+# 6.11.为oracle账户设置密码
+echo ${oraclePasswd} | passwd --stdin oracle
+if [ $? -eq 0 ]
+then
+    echo "修改oracle密码 - Success"
+else
+    echo -e "\033[31m修改oracle密码----------Failed\033[0m"
+fi
+
+# 6.12.为grid账户设置密码
+echo ${gridPasswd} | passwd --stdin grid
+if [ $? -eq 0 ]
+then
+    echo "修改grid密码 - Success"
+else
+    echo -e "\033[31m修改grid密码----------Failed\033[0m"
+fi
+
+# 6.13.检查oracle用户所属组是否正确
+id oracle | grep asmadmin > /dev/null 2>&1
+if [ $? -eq 0 ]
+then
+    echo "oracle附属组检查通过"
+else
+    usermod -aG asmadmin oracle
+    if [ $? -eq 0 ]
+    then
+        echo "用oracle用户添加组成功"
+    else
+        echo -e "\033[31m用oracle用户添加组失败----------Failed\033[0m"
+    fi
+fi
+
+id oracle | grep asmdba > /dev/null 2>&1
+if [ $? -eq 0 ]
+then
+    echo "oracle附属组检查通过"
+else
+    usermod -aG asmdba oracle
+    if [ $? -eq 0 ]
+    then
+        echo "用oracle用户添加组成功"
+    else
+        echo -e "\033[31m用oracle用户添加组失败----------Failed\033[0m"
+    fi
+fi
+
+id oracle | grep dba > /dev/null 2>&1
+if [ $? -eq 0 ]
+then
+    echo "oracle附属组检查通过"
+else
+    usermod -aG dba oracle
+    if [ $? -eq 0 ]
+    then
+        echo "用oracle用户添加组成功"
+    else
+        echo -e "\033[31m用oracle用户添加组失败----------Failed\033[0m"
+    fi
+fi
+
+id oracle | grep oper > /dev/null 2>&1
+if [ $? -eq 0 ]
+then
+    echo "oracle附属组检查通过"
+else
+    usermod -aG oper oracle
+    if [ $? -eq 0 ]
+    then
+        echo "用oracle用户添加组成功"
+    else
+        echo -e "\033[31m用oracle用户添加组失败----------Failed\033[0m"
+    fi
+fi
+
+# 6.14.检查grid用户所属组是否正确
+id grid | grep asmadmin > /dev/null 2>&1
+if [ $? -eq 0 ]
+then
+    echo "grid附属组检查通过"
+else
+    usermod -aG asmadmin grid
+    if [ $? -eq 0 ]
+    then
+        echo "用户 grid 添加组成功"
+    else
+        echo -e "\033[31m用户 grid 添加组失败----------Failed\033[0m"
+    fi
+fi
+
+id grid | grep asmdba > /dev/null 2>&1
+if [ $? -eq 0 ]
+then
+    echo "grid附属组检查通过"
+else
+    usermod -aG asmdba grid
+    if [ $? -eq 0 ]
+    then
+        echo "用户 grid 添加组成功"
+    else
+        echo -e "\033[31m用户 grid 添加组失败----------Failed\033[0m"
+    fi
+fi
+
+id grid | grep asmoper > /dev/null 2>&1
+if [ $? -eq 0 ]
+then
+    echo "grid附属组检查通过"
+else
+    usermod -aG asmoper grid
+    if [ $? -eq 0 ]
+    then
+        echo "用户 grid 添加组成功"
+    else
+        echo -e "\033[31m用户 grid 添加组失败----------Failed\033[0m"
+    fi
+fi
+
+id grid | grep dba > /dev/null 2>&1
+if [ $? -eq 0 ]
+then
+    echo "grid附属组检查通过"
+else
+    usermod -aG dba grid
+    if [ $? -eq 0 ]
+    then
+        echo "用户 grid 添加组成功"
+    else
+        echo -e "\033[31m用户 grid 添加组失败----------Failed\033[0m"
+    fi
+fi
+
+# 获取oinstall组的最终ID
+GROUPID=`cat /etc/group | grep oinstall | awk -F ":" '{print $3}'`
+
+# 6.15.检查oracle用户主组是否正确
+id oracle | grep gid=${GROUPID} > /dev/null 2>&1
+if [ $? -eq 0 ]
+then
+    echo "oracle主组检查通过"
+else
+    usermod --gid ${GROUPID} oracle
+    if [ $? -eq 0 ]
+    then
+        echo "用户 grid 主组修改成功"
+    else
+        echo -e "\033[31m用户 oracle 主组修改失败----------Failed\033[0m"
+    fi
+fi
+
+# 6.16.检查grid用户主组是否正确
+id grid | grep gid=${GROUPID} > /dev/null 2>&1
+if [ $? -eq 0 ]
+then
+    echo "oracle主组检查通过"
+else
+    usermod --gid ${GROUPID} grid
+    if [ $? -eq 0 ]
+    then
+        echo "用户 grid 主组修改成功"
+    else
+        echo -e "\033[31m用户 grid 主组修改失败----------Failed\033[0m"
+    fi
+fi
+
+####################################################################################
+#edit 新建grid和oracle安装目录
+####################################################################################
+mkdir -p ${GRID_BASETemp}
+mkdir -p ${GRID_HOMETemp}
+mkdir -p ${ORACLE_BASETemp}
+chown -R grid:oinstall ${GridOracleHomeTemp}
+chown oracle:oinstall ${ORACLE_BASETemp}
+chmod -R 775 ${GridOracleHomeTemp}
+####################################################################################
+#edit 配置oracle和grid用户变量
+####################################################################################
+if [ $nodeNum -eq 1 ]
+then
+    grep 666666 /home/oracle/.bash_profile
+    if [ $? -eq 0 ]; then
+        cp /home/oracle/.bash_profile.666666 /home/oracle/.bash_profile
+    else
+        cp /home/oracle/.bash_profile /home/oracle/.bash_profile.666666
+    fi
+
+cat <<EOF >>/home/oracle/.bash_profile
+#add by 666666
+export ORACLE_SID=${ORACLE_SIDTemp}1  # RAC1
+export ORACLE_UNQNAME=${ORACLE_UNQNAMETemp}
+export ORACLE_BASE=${ORACLE_BASETemp}
+export ORACLE_HOME=${ORACLE_HOMETemp}
+export TNS_ADMIN=\$ORACLE_HOME/network/admin
+export PATH=/usr/sbin:\$PATH
+ORACLE_HOSTNAME=${rac1HostName};export ORACLE_HOSTNAME ##修改为本节点的hostname
+NLS_DATE_FORMAT="yyyy-mm-dd hh24:mi:ss";export NLS_DATE_FORMAT
+THREADS_FLAG=native;export THREADS_FLAG
+export PATH=\$ORACLE_HOME/bin:\$PATH
+export LD_LIBRARY_PATH=\$ORACLE_HOME/lib:/lib:/usr/lib
+#alias sqlplus='rlwrap sqlplus'
+#alias rman='rlwrap rman'
+#alias asmcmd='rlwrap asmcmd'
+if [ \$USER = "oracle" ] || [ \$USER = "gird" ];then
+        if [ \$SHELL = "/bin/ksh" ];then
+                ulimit -p 16384
+                ulimit -n 65536
+        else
+                ulimit -u 16384 -n 65536
+        fi
+   umask 022
+fi
+EOF
+
+    grep 666666 /home/grid/.bash_profile
+    if [ $? -eq 0 ]; then
+        cp /home/grid/.bash_profile.666666 /home/grid/.bash_profile
+    else
+        cp /home/grid/.bash_profile /home/grid/.bash_profile.666666
+    fi
+
+cat <<EOF >>/home/grid/.bash_profile
+#add by 666666
+export ORACLE_SID=${GRID_SIDTemp}1  # RAC1
+export ORACLE_BASE=${GRID_BASETemp}
+export ORACLE_HOME=${GRID_HOMETemp}
+export PATH=/usr/sbin:\$PATH
+ORACLE_HOSTNAME=${rac1HostName};export ORACLE_HOSTNAME ##修改为本节点的hostname
+NLS_DATE_FORMAT="yyyy-mm-dd hh24:mi:ss";export NLS_DATE_FORMAT
+THREADS_FLAG=native;export THREADS_FLAG
+export PATH=\$ORACLE_HOME/bin:\$PATH
+export LD_LIBRARY_PATH=\$ORACLE_HOME/lib:/lib:/usr/lib
+export CLASSPATH=\$ORACLE_HOME/JRE:\$ORACLE_HOME/jlib:\$ORACLE_HOME/rdbms/jlib
+#alias sqlplus='rlwrap sqlplus'
+#alias rman='rlwrap rman'
+#alias asmcmd='rlwrap asmcmd'
+if [ \$USER = "oracle" ] || [ \$USER = "gird" ];then
+        if [ \$SHELL = "/bin/ksh" ];then
+                ulimit -p 16384
+                ulimit -n 65536
+        else
+                ulimit -u 16384 -n 65536
+        fi
+   umask 022
+fi
+EOF
+
+else
+    grep 666666 /home/oracle/.bash_profile
+    if [ $? -eq 0 ]; then
+        cp /home/oracle/.bash_profile.666666 /home/oracle/.bash_profile
+    else
+        cp /home/oracle/.bash_profile /home/oracle/.bash_profile.666666
+    fi
+
+cat <<EOF >>/home/oracle/.bash_profile
+#add by 666666
+export ORACLE_SID=${ORACLE_SIDTemp}2  # RAC2
+export ORACLE_UNQNAME=${ORACLE_UNQNAMETemp}
+export ORACLE_BASE=${ORACLE_BASETemp}
+export ORACLE_HOME=${ORACLE_HOMETemp}
+export TNS_ADMIN=\$ORACLE_HOME/network/admin
+export PATH=/usr/sbin:\$PATH
+export PATH=\$ORACLE_HOME/bin:\$PATH
+ORACLE_HOSTNAME=${rac2HostName};export ORACLE_HOSTNAME ##修改为本节点的hostname
+NLS_DATE_FORMAT="yyyy-mm-dd hh24:mi:ss";export NLS_DATE_FORMAT
+THREADS_FLAG=native;export THREADS_FLAG
+export LD_LIBRARY_PATH=\$ORACLE_HOME/lib:/lib:/usr/lib
+#alias sqlplus='rlwrap sqlplus'
+#alias rman='rlwrap rman'
+#alias asmcmd='rlwrap asmcmd'
+
+if [ \$USER = "oracle" ] || [ \$USER = "gird" ];then
+        if [ \$SHELL = "/bin/ksh" ];then
+                ulimit -p 16384
+                ulimit -n 65536
+        else
+                ulimit -u 16384 -n 65536
+        fi
+   umask 022
+fi
+
+EOF
+
+    grep 666666 /home/grid/.bash_profile
+    if [ $? -eq 0 ]; then
+        cp /home/grid/.bash_profile.666666 /home/grid/.bash_profile
+    else
+        cp /home/grid/.bash_profile /home/grid/.bash_profile.666666
+    fi
+
+cat <<EOF >>/home/grid/.bash_profile
+#add by 666666
+export ORACLE_SID=${GRID_SIDTemp}2  # RAC2
+export ORACLE_BASE=${GRID_BASETemp}
+export ORACLE_HOME=${GRID_HOMETemp}
+export PATH=/usr/sbin:\$PATH
+export PATH=\$ORACLE_HOME/bin:\$PATH
+ORACLE_HOSTNAME=${rac2HostName};export ORACLE_HOSTNAME ##修改为本节点的hostname
+NLS_DATE_FORMAT="yyyy-mm-dd hh24:mi:ss";export NLS_DATE_FORMAT
+THREADS_FLAG=native;export THREADS_FLAG
+export LD_LIBRARY_PATH=\$ORACLE_HOME/lib:/lib:/usr/lib
+export CLASSPATH=\$ORACLE_HOME/JRE:\$ORACLE_HOME/jlib:\$ORACLE_HOME/rdbms/jlib
+#alias sqlplus='rlwrap sqlplus'
+#alias rman='rlwrap rman'
+#alias asmcmd='rlwrap asmcmd'
+if [ \$USER = "oracle" ] || [ \$USER = "gird" ];then
+        if [ \$SHELL = "/bin/ksh" ];then
+                ulimit -p 16384
+                ulimit -n 65536
+        else
+                ulimit -u 16384 -n 65536
+        fi
+   umask 022
+fi
+EOF
+fi
+
+#root 用户添加grid软件的bin目录
+cat <<EOF >>/etc/profile
+export PATH=\$PATH:${GRID_HOMETemp}/bin
+EOF
+####################################################################################
+#edit oracle用户和GRID用户软硬件资源设置
+####################################################################################
+cat  <<EOF >>/etc/security/limits.conf
+oracle soft   nofile 1024
+oracle hard   nofile 65536
+oracle soft   nproc 2047
+oracle hard   nproc 16384
+oracle soft   stack 10240
+oracle hard   stack 32768
+grid soft   nofile 1024
+grid hard   nofile 65536
+grid soft   nproc 2047
+grid hard   nproc 16384
+grid soft   stack 10240
+grid hard   stack 32768
+EOF
+####################################################################################
+#edit 系统参数设置
+####################################################################################
+cat  <<EOF >>/etc/sysctl.conf
+fs.aio-max-nr = 1048576
+fs.file-max = 6815744
+kernel.shmall = 1073741824
+kernel.shmmax = 4398046511104
+kernel.shmmni = 4096
+kernel.sem = 250 32000 100 128
+net.ipv4.ip_local_port_range = 9000 65500
+net.core.rmem_default = 262144
+net.core.rmem_max = 4194304
+net.core.wmem_default = 262144
+net.core.wmem_max = 1048576
+EOF
+sysctl -p
+
+#11
+cp /etc/pam.d/login /etc/pam.d/login.bak
+cat  <<EOF >>/etc/pam.d/login
+session    required     pam_limits.so
+EOF
+
+
+####################################################################################
+#配置本地YUM并安装依赖包
+####################################################################################
+mkdir -p /mnt/cdrom
+mount /dev/cdrom /mnt/cdrom
+cd /etc/yum.repos.d/
+rename .repo .repo.bak * 
+touch /etc/yum.repos.d/CentOS-Media.repo
+cat <<EOF >/etc/yum.repos.d/CentOS-Media.repo
+[local]
+name=local
+baseurl=file:///mnt/cdrom
+gpgcheck=0
+enabled=1
+EOF
+
+
+
+yum clean all       #清理本地缓存
+yum clean plugins   #清理插件缓存
+
+
+#依赖包安装
+yum install -y binutils-* 
+yum install -y compat-libstdc++-* 
+yum install -y elfutils-libelf-* 
+yum install -y elfutils-libelf-* 
+yum install -y elfutils-libelf-devel-static-* 
+yum install -y elfutils-libelf-devel
+yum install -y gcc-* 
+yum install -y gcc-c++-* 
+yum install -y glibc-* 
+yum install -y glibc-common-* 
+yum install -y glibc-devel-* 
+yum install -y glibc-headers-* 
+yum install -y kernel-headers-* 
+yum install -y ksh-* 
+yum install -y libaio-* 
+yum install -y libaio-devel-* 
+yum install -y libgcc-* 
+yum install -y libgomp-* 
+yum install -y libstdc++-* 
+yum install -y libstdc++-devel-* 
+yum install -y make-* 
+yum install -y sysstat-* 
+yum install -y compat-libcap*
+yum install -y unixODBC
+yum install -y unixODBC-devel
+yum install -y readline
+yum install -y readline-devel
+yum install -y libcap
+yum install -y xorg-x11-xauth
+yum install -y xterm* 
+yum install -y bind*
+yum install -y libXp
+yum install -y numactl-devel-*
+yum install -y openssh-clients
+yum install -y smartmontools
+yum install -y bind bind-chroot bind-utils bind-libs
+yum install -y unzip zip
+yum install -y libXtst
+yum install -y libXi
+yum install -y net-tools
+
+if [ ! -d "${OracleSoft}" ];then
+	mkdir ${OracleSoft}
+	if [ $nodeNum -eq 1 ];then
+		touch ${OracleSoft}/{grid.rsp,db.rsp}
+		chmod 775 ${OracleSoft}/ -R
+	fi 
+else
+    if [ $nodeNum -eq 1 ];then
+		if [ ! -f "${OracleSoft}/grid.rsp" ];then
+			touch ${OracleSoft}/grid.rsp
+			chmod 775 ${OracleSoft}/grid.rsp
+		else
+		   cat /dev/null >${OracleSoft}/grid.rsp
+		fi
+		if [ ! -f "${OracleSoft}/db.rsp" ];then
+			touch ${OracleSoft}/db.rsp
+			chmod 775 ${OracleSoft}/db.rsp
+		else
+		   cat /dev/null >${OracleSoft}/db.rsp
+		fi
+	fi
+fi
+####################################################################################
+#edit responseFile of grid_install.rsp
+####################################################################################
+if [ $nodeNum -eq 1 ];then
+	su -  -c "echo 'oracle.install.responseFileVersion=/oracle/install/rspfmt_crsinstall_response_schema_v11_2_0' > ${OracleSoft}/grid.rsp"
+	su -  -c "echo 'ORACLE_HOSTNAME='${rac1HostName} >> ${OracleSoft}/grid.rsp"
+	su -  -c "echo 'INVENTORY_LOCATION=/u01/app/oraInventory' >> ${OracleSoft}/grid.rsp"
+	su -  -c "echo 'SELECTED_LANGUAGES=en,zh_CN' >> ${OracleSoft}/grid.rsp"
+	su -  -c "echo 'oracle.install.option=CRS_CONFIG' >> ${OracleSoft}/grid.rsp"
+	su -  -c "echo 'ORACLE_BASE='${GRID_BASETemp} >> ${OracleSoft}/grid.rsp"
+	su -  -c "echo 'ORACLE_HOME='${GRID_HOMETemp} >> ${OracleSoft}/grid.rsp"
+	su -  -c "echo 'oracle.install.asm.OSDBA=asmdba' >> ${OracleSoft}/grid.rsp"
+	su -  -c "echo 'oracle.install.asm.OSOPER=asmoper' >> ${OracleSoft}/grid.rsp"
+	su -  -c "echo 'oracle.install.asm.OSASM=asmadmin' >> ${OracleSoft}/grid.rsp"
+	su -  -c "echo 'oracle.install.crs.config.gpnp.scanName='${scname} >> ${OracleSoft}/grid.rsp"
+	su -  -c "echo 'oracle.install.crs.config.gpnp.scanPort=1521' >> ${OracleSoft}/grid.rsp"
+	su -  -c "echo 'oracle.install.crs.config.clusterName='${clusterName} >> ${OracleSoft}/grid.rsp"
+	su -  -c "echo 'oracle.install.crs.config.gpnp.configureGNS=false' >> ${OracleSoft}/grid.rsp"
+	su -  -c "echo 'oracle.install.crs.config.gpnp.gnsSubDomain=' >> ${OracleSoft}/grid.rsp"
+	su -  -c "echo 'oracle.install.crs.config.gpnp.gnsVIPAddress=' >> ${OracleSoft}/grid.rsp"
+	su -  -c "echo 'oracle.install.crs.config.autoConfigureClusterNodeVIP=false' >> ${OracleSoft}/grid.rsp"
+	su -  -c "echo 'oracle.install.crs.config.clusterNodes='${rac1HostName}.${dnsname}:${rac1HostName}-vip.${dnsname},${rac2HostName}.${dnsname}:${rac2HostName}-vip.${dnsname} >> ${OracleSoft}/grid.rsp"
+	su -  -c "echo 'oracle.install.crs.config.networkInterfaceList='eth0:${rac1PlublicIP%.*}.0:1,eth1:${rac1PrivIP%.*}.0:2 >> ${OracleSoft}/grid.rsp"
+	su -  -c "echo 'oracle.install.crs.config.storageOption=ASM_STORAGE' >> ${OracleSoft}/grid.rsp"
+	su -  -c "echo 'oracle.install.crs.config.sharedFileSystemStorage.diskDriveMapping=' >> ${OracleSoft}/grid.rsp"
+	su -  -c "echo 'oracle.install.crs.config.sharedFileSystemStorage.votingDiskLocations=' >> ${OracleSoft}/grid.rsp"
+	su -  -c "echo 'oracle.install.crs.config.sharedFileSystemStorage.votingDiskRedundancy=NORMAL' >> ${OracleSoft}/grid.rsp"
+	su -  -c "echo 'oracle.install.crs.config.sharedFileSystemStorage.ocrLocations=' >> ${OracleSoft}/grid.rsp"
+	su -  -c "echo 'oracle.install.crs.config.sharedFileSystemStorage.ocrRedundancy=NORMAL' >> ${OracleSoft}/grid.rsp"
+	su -  -c "echo 'oracle.install.crs.config.useIPMI=false' >> ${OracleSoft}/grid.rsp"
+	su -  -c "echo 'oracle.install.crs.config.ipmi.bmcUsername=' >> ${OracleSoft}/grid.rsp"
+	su -  -c "echo 'oracle.install.crs.config.ipmi.bmcPassword=' >> ${OracleSoft}/grid.rsp"
+	su -  -c "echo 'oracle.install.asm.SYSASMPassword=oracle' >> ${OracleSoft}/grid.rsp"
+	su -  -c "echo 'oracle.install.asm.diskGroup.name='${diskGroup_name} >> ${OracleSoft}/grid.rsp"
+	su -  -c "echo 'oracle.install.asm.diskGroup.redundancy='${diskGroup_redundancy} >> ${OracleSoft}/grid.rsp"
+	su -  -c "echo 'oracle.install.asm.diskGroup.AUSize=1' >> ${OracleSoft}/grid.rsp"
+	su -  -c "echo 'oracle.install.asm.diskGroup.disks='${disks} >> ${OracleSoft}/grid.rsp"
+	su -  -c "echo 'oracle.install.asm.diskGroup.diskDiscoveryString='${diskDiscoveryString} >> ${OracleSoft}/grid.rsp"
+	su -  -c "echo 'oracle.install.asm.monitorPassword='${monitorPassword} >> ${OracleSoft}/grid.rsp"
+	su -  -c "echo 'oracle.install.crs.upgrade.clusterNodes=' >> ${OracleSoft}/grid.rsp"
+	su -  -c "echo 'oracle.install.asm.upgradeASM=false' >> ${OracleSoft}/grid.rsp"
+	su -  -c "echo 'oracle.installer.autoupdates.option=SKIP_UPDATES' >> ${OracleSoft}/grid.rsp"
+	su -  -c "echo 'oracle.installer.autoupdates.downloadUpdatesLoc=' >> ${OracleSoft}/grid.rsp"
+	su -  -c "echo 'AUTOUPDATES_MYORACLESUPPORT_USERNAME=' >> ${OracleSoft}/grid.rsp"
+	su -  -c "echo 'AUTOUPDATES_MYORACLESUPPORT_PASSWORD=' >> ${OracleSoft}/grid.rsp"
+	su -  -c "echo 'PROXY_HOST=' >> ${OracleSoft}/grid.rsp"
+	su -  -c "echo 'PROXY_PORT=0' >> ${OracleSoft}/grid.rsp"
+	su -  -c "echo 'PROXY_USER=' >> ${OracleSoft}/grid.rsp"
+	su -  -c "echo 'PROXY_PWD==' >> ${OracleSoft}/grid.rsp"
+	su -  -c "echo 'PROXY_REALM=' >> ${OracleSoft}/grid.rsp"
+fi
+
+
+####################################################################################
+#edit responseFile of db_install.rsp
+#################################################################################### 
+if [ $nodeNum -eq 1 ];then
+	su -  -c "echo 'oracle.install.responseFileVersion=/oracle/install/rspfmt_dbinstall_response_schema_v11_2_0' >> ${OracleSoft}/db.rsp"
+	su -  -c "echo 'oracle.install.option=INSTALL_DB_SWONLY' >> ${OracleSoft}/db.rsp"
+	su -  -c "echo 'ORACLE_HOSTNAME='${rac1HostName} >> ${OracleSoft}/db.rsp"
+	su -  -c "echo 'UNIX_GROUP_NAME=oinstall' >> ${OracleSoft}/db.rsp"
+	su -  -c "echo 'INVENTORY_LOCATION=/u01/app/oraInventory' >> ${OracleSoft}/db.rsp"
+	su -  -c "echo 'SELECTED_LANGUAGES=en,zh_CN' >> ${OracleSoft}/db.rsp"
+	su -  -c "echo 'ORACLE_HOME='${ORACLE_HOMETemp} >> ${OracleSoft}/db.rsp"
+	su -  -c "echo 'ORACLE_BASE='${ORACLE_BASETemp}>> ${OracleSoft}/db.rsp"
+	su -  -c "echo 'oracle.install.db.InstallEdition=EE' >> ${OracleSoft}/db.rsp"
+	su -  -c "echo 'oracle.install.db.EEOptionsSelection=false' >> ${OracleSoft}/db.rsp"
+	su -  -c "echo 'oracle.install.db.optionalComponents=oracle.rdbms.partitioning:11.2.0.4.0,oracle.oraolap:11.2.0.4.0,oracle.rdbms.dm:11.2.0.4.0,oracle.rdbms.dv:11.2.0.4.0,oracle.rdbms.lbac:11.2.0.4.0,oracle.rdbms.rat:11.2.0.4.0' >> ${OracleSoft}/db.rsp"
+	su -  -c "echo 'oracle.install.db.DBA_GROUP=dba' >> ${OracleSoft}/db.rsp"
+	su -  -c "echo 'oracle.install.db.OPER_GROUP=oper' >> ${OracleSoft}/db.rsp"
+	su -  -c "echo 'oracle.install.db.CLUSTER_NODES='${rac1HostName},${rac2HostName} >> ${OracleSoft}/db.rsp"
+	su -  -c "echo 'oracle.install.db.isRACOneInstall=' >> ${OracleSoft}/db.rsp"
+	su -  -c "echo 'oracle.install.db.racOneServiceName=' >> ${OracleSoft}/db.rsp"
+	su -  -c "echo 'oracle.install.db.config.starterdb.type=GENERAL_PURPOSE' >> ${OracleSoft}/db.rsp"
+	su -  -c "echo 'oracle.install.db.config.starterdb.globalDBName'=${ORACLE_UNQNAMETemp} >> ${OracleSoft}/db.rsp"
+	su -  -c "echo 'oracle.install.db.config.starterdb.SID'=${ORACLE_UNQNAMETemp} >> ${OracleSoft}/db.rsp"
+	su -  -c "echo 'oracle.install.db.config.starterdb.characterSet=AL32UTF8' >> ${OracleSoft}/db.rsp"
+	su -  -c "echo 'oracle.install.db.config.starterdb.memoryOption=true' >> ${OracleSoft}/db.rsp"
+	su -  -c "echo 'oracle.install.db.config.starterdb.memoryLimit=700' >> ${OracleSoft}/db.rsp"
+	su -  -c "echo 'oracle.install.db.config.starterdb.installExampleSchemas=false' >> ${OracleSoft}/db.rsp"
+	su -  -c "echo 'oracle.install.db.config.starterdb.enableSecuritySettings=true' >> ${OracleSoft}/db.rsp"
+	su -  -c "echo 'oracle.install.db.config.starterdb.password.ALL='${monitorPassword} >> ${OracleSoft}/db.rsp"
+	su -  -c "echo 'oracle.install.db.config.starterdb.password.SYS=' >> ${OracleSoft}/db.rsp"
+	su -  -c "echo 'oracle.install.db.config.starterdb.password.SYSTEM=' >> ${OracleSoft}/db.rsp"
+	su -  -c "echo 'oracle.install.db.config.starterdb.password.SYSMAN=' >> ${OracleSoft}/db.rsp"
+	su -  -c "echo 'oracle.install.db.config.starterdb.password.DBSNMP=' >> ${OracleSoft}/db.rsp"
+	su -  -c "echo 'oracle.install.db.config.starterdb.control=DB_CONTROL' >> ${OracleSoft}/db.rsp"
+	su -  -c "echo 'oracle.install.db.config.starterdb.gridcontrol.gridControlServiceURL=' >> ${OracleSoft}/db.rsp"
+	su -  -c "echo 'oracle.install.db.config.starterdb.automatedBackup.enable=false' >> ${OracleSoft}/db.rsp"
+	su -  -c "echo 'oracle.install.db.config.starterdb.automatedBackup.osuid=' >> ${OracleSoft}/db.rsp"
+	su -  -c "echo 'oracle.install.db.config.starterdb.automatedBackup.ospwd=' >> ${OracleSoft}/db.rsp"
+	su -  -c "echo 'oracle.install.db.config.starterdb.storageType=' >> ${OracleSoft}/db.rsp"
+	su -  -c "echo 'oracle.install.db.config.starterdb.fileSystemStorage.dataLocation=' >> ${OracleSoft}/db.rsp"
+	su -  -c "echo 'oracle.install.db.config.starterdb.fileSystemStorage.recoveryLocation=' >> ${OracleSoft}/db.rsp"
+	su -  -c "echo 'oracle.install.db.config.asm.diskGroup='${datadiskgroupname} >> ${OracleSoft}/db.rsp"
+	su -  -c "echo 'MYORACLESUPPORT_USERNAME=' >> ${OracleSoft}/db.rsp"
+	su -  -c "echo 'MYORACLESUPPORT_PASSWORD=' >> ${OracleSoft}/db.rsp"
+	su -  -c "echo 'SECURITY_UPDATES_VIA_MYORACLESUPPORT=' >> ${OracleSoft}/db.rsp"
+	su -  -c "echo 'DECLINE_SECURITY_UPDATES=true' >> ${OracleSoft}/db.rsp"
+	su -  -c "echo 'PROXY_HOST=' >> ${OracleSoft}/db.rsp"
+	su -  -c "echo 'PROXY_PORT=0' >> ${OracleSoft}/db.rsp"
+	su -  -c "echo 'PROXY_USER=' >> ${OracleSoft}/db.rsp"
+	su -  -c "echo 'PROXY_PWD=' >> ${OracleSoft}/db.rsp"
+	su -  -c "echo 'COLLECTOR_SUPPORTHUB_URL=' >> ${OracleSoft}/db.rsp"
+	su -  -c "echo 'oracle.installer.autoupdates.option=' >> ${OracleSoft}/db.rsp"
+	su -  -c "echo 'oracle.installer.autoupdates.downloadUpdatesLoc=' >> ${OracleSoft}/db.rsp"
+	su -  -c "echo 'AUTOUPDATES_MYORACLESUPPORT_USERNAME=' >> ${OracleSoft}/db.rsp"
+	su -  -c "echo 'AUTOUPDATES_MYORACLESUPPORT_PASSWORD=' >> ${OracleSoft}/db.rsp"
+fi
+####################################################################################
+#DNS 解析配置区分 6和7
+#################################################################################### 
+if [ ${LinuxVer} -eq 7 ];then
+if [ $nodeNum -eq 1 ];then
+	grep 666666 /etc/named.conf
+	if [ $? -eq 0 ]; then
+          cp /etc/named.conf.666666 /etc/named.conf
+           cat /dev/null >/etc/named.conf
+	else
+           cp /etc/named.conf /etc/named.conf.666666
+           cat /dev/null >/etc/named.conf
+         fi
+cat <<EOF >>/etc/named.conf
+#add by 666666
+options {
+	listen-on port 53 { any; };
+	listen-on-v6 port 53 { any; };
+	directory 	"/var/named";
+	dump-file 	"/var/named/data/cache_dump.db";
+	statistics-file "/var/named/data/named_stats.txt";
+	memstatistics-file "/var/named/data/named_mem_stats.txt";
+	recursing-file  "/var/named/data/named.recursing";
+	secroots-file   "/var/named/data/named.secroots";
+	allow-query     { any; };
+
+
+	recursion yes;
+
+	dnssec-enable yes;
+	dnssec-validation yes;
+
+
+	bindkeys-file "/etc/named.root.key";
+
+	managed-keys-directory "/var/named/dynamic";
+
+	pid-file "/run/named/named.pid";
+	session-keyfile "/run/named/session.key";
+};
+
+logging {
+		channel default_debug {
+				file "data/named.run";
+				severity dynamic;
+		};
+};
+zone "${dnsname}" IN {
+	   type master;
+	   file "db.${dnsname}";
+};
+
+zone  "`echo $rac1PlublicIP|awk -F '.' '{for(i=NF-1;i>1;i--)printf ("%s.",$i);print $1}'`.in-addr.arpa" {
+	   type master;
+	   file "${dnsname}.${rac1PlublicIP%.*}";
+};
+
+zone  "0.0.127.in-addr.arpa" in {
+	   type master;
+	   file "${dnsname}.127.0.0";
+};
+
+zone  "." {
+	   type hint;
+	   file "/dev/null";
+};
+
+include "/etc/named.rfc1912.zones";
+include "/etc/named.root.key";
+EOF
+[ $? -eq 0 ] && echo "写入named.conf文件 - Success" || echo -e "\033[31m写入named.conf----------Failed\033[0m"
+##生成DNS解析文件
+if [ ! -f "/var/named/db.${dnsname}" ];then
+	touch /var/named/db.${dnsname}
+else
+   cat /dev/null >/var/named/db.${dnsname}
+fi
+
+if [ ! -f "/var/named/${dnsname}.${rac1PlublicIP%.*}" ];then
+	touch /var/named/${dnsname}.${rac1PlublicIP%.*}
+else
+   cat /dev/null >/var/named/${dnsname}.${rac1PlublicIP%.*}
+fi
+
+if [ ! -f "/var/named/${dnsname}.127.0.0" ];then
+	touch /var/named/${dnsname}.127.0.0
+else
+   cat /dev/null >/var/named/${dnsname}.127.0.0
+fi
+cat <<EOF >>/var/named/db.${dnsname}
+\$TTL 3d
+${dnsname}. in soa ${rac1HostName}.${dnsname}. root.${dnsname}. (
+								 2015123001;
+								 3h;
+								 1h;
+								 2w
+								 2h)
+${dnsname}.                in NS    ${rac1HostName}.${dnsname}.
+localhost.${dnsname}.     in A     127.0.0.1
+${rac1HostName}.${dnsname}.            in A   ${rac1PlublicIP}
+${rac2HostName}.${dnsname}.            in A   ${rac2PlublicIP}
+${rac1HostName}-vip.${dnsname}.      in A     ${rac1VIP}
+${rac2HostName}-vip.${dnsname}.      in A     ${rac2VIP}
+${scname}.${dnsname}.      in A     ${scanIP1}
+${scname}.${dnsname}.      in A     ${scanIP2}
+${scname}.${dnsname}.      in A     ${scanIP3}
+${rac1HostName}-priv.${dnsname}.     in A     ${rac1PrivIP}
+${rac2HostName}-priv.${dnsname}.     in A     ${rac2PrivIP}
+EOF
+[ $? -eq 0 ] && echo "写入db.${dnsname}文件 - Success" || echo -e "\033[31m写入db.${dnsname}----------Failed\033[0m"
+
+
+cat <<EOF >>/var/named/${dnsname}.${rac1PlublicIP%.*}
+\$TTL 3d
+`echo $rac1PlublicIP|awk -F '.' '{for(i=NF-1;i>1;i--)printf ("%s.",$i);print $1}'`.in-addr.arpa. in soa ${rac1HostName}.${dnsname}. root.${dnsname}. (
+								   2015123001;
+								   3h;
+								   2h;
+								   2w
+								   1h)
+`echo $rac1PlublicIP|awk -F '.' '{for(i=NF-1;i>1;i--)printf ("%s.",$i);print $1}'`.in-addr.arpa.      in NS  ${rac1HostName}.${dnsname}.
+`echo $rac1PlublicIP|awk -F '.' '{for(i=NF;i>1;i--)printf ("%s.",$i);print $1}'`.in-addr.arpa.   in PTR ${rac1HostName}.${dnsname}.
+`echo $rac2PlublicIP|awk -F '.' '{for(i=NF;i>1;i--)printf ("%s.",$i);print $1}'`.in-addr.arpa.   in PTR ${rac2HostName}.${dnsname}.
+`echo $rac1VIP|awk -F '.' '{for(i=NF;i>1;i--)printf ("%s.",$i);print $1}'`.in-addr.arpa.   in PTR ${rac1HostName}-vip.${dnsname}.
+`echo $rac2VIP|awk -F '.' '{for(i=NF;i>1;i--)printf ("%s.",$i);print $1}'`.in-addr.arpa.   in PTR ${rac2HostName}-vip.${dnsname}.
+`echo $scanIP1|awk -F '.' '{for(i=NF;i>1;i--)printf ("%s.",$i);print $1}'`.in-addr.arpa.   in PTR ${scname}.${dnsname}.
+`echo $scanIP2|awk -F '.' '{for(i=NF;i>1;i--)printf ("%s.",$i);print $1}'`.in-addr.arpa.   in PTR ${scname}.${dnsname}.
+`echo $scanIP3|awk -F '.' '{for(i=NF;i>1;i--)printf ("%s.",$i);print $1}'`.in-addr.arpa.   in PTR ${scname}.${dnsname}.
+`echo $rac1PrivIP|awk -F '.' '{for(i=NF;i>1;i--)printf ("%s.",$i);print $1}'`.in-addr.arpa.     in PTR ${rac1HostName}-priv.${dnsname}.
+`echo $rac2PrivIP|awk -F '.' '{for(i=NF;i>1;i--)printf ("%s.",$i);print $1}'`.in-addr.arpa.     in PTR ${rac2HostName}-priv.${dnsname}.                                                   
+EOF
+[ $? -eq 0 ] && echo "写入${dnsname}.${rac1PlublicIP%.*}文件 - Success" || echo -e "\033[31m写入${dnsname}.${rac1PlublicIP%.*}----------Failed\033[0m"
+
+
+cat <<EOF >>/var/named/${dnsname}.127.0.0
+\$TTL 3d
+0.0.127.in-addr.arpa.  in soa ${rac1HostName}.${dnsname}.  root.${dnsname}. (
+										2015123001;
+										3h;
+										2h;
+										2w
+										1h)
+0.0.127.in-addr.arpa.     in NS  ${rac1HostName}.${dnsname}.
+1.0.0.127.in-addr.arpa.   in PTR localhost.${dnsname}.
+
+EOF
+[ $? -eq 0 ] && echo "写入${dnsname}.127.0.0文件 - Success" || echo -e "\033[31m写入${dnsname}.127.0.0----------Failed\033[0m"
+elif [ $nodeNum -eq 2 ];then
+	grep 666666 /etc/named.conf
+	if [ $? -eq 0 ]; then          
+		cp /etc/named.conf.666666 /etc/named.conf
+		cat /dev/null >/etc/named.conf
+	else
+		cp /etc/named.conf /etc/named.conf.666666
+		cat /dev/null >/etc/named.conf
+                
+	fi
+cat <<EOF >>/etc/named.conf
+#add by 666666
+options {
+	listen-on port 53 { any; };
+	listen-on-v6 port 53 { any; };
+	directory 	"/var/named";
+	dump-file 	"/var/named/data/cache_dump.db";
+	statistics-file "/var/named/data/named_stats.txt";
+	memstatistics-file "/var/named/data/named_mem_stats.txt";
+	recursing-file  "/var/named/data/named.recursing";
+	secroots-file   "/var/named/data/named.secroots";
+	allow-query     { any; };
+	
+	recursion yes;
+	dnssec-enable yes;
+	dnssec-validation yes;
+	
+	bindkeys-file "/etc/named.root.key";
+	managed-keys-directory "/var/named/dynamic";
+	pid-file "/run/named/named.pid";
+	session-keyfile "/run/named/session.key";
+};
+logging {
+		channel default_debug {
+				file "data/named.run";
+				severity dynamic;
+		};
+};
+zone "${dnsname}" IN {
+	   type slave;
+	   file "db.${dnsname}";
+	   masters {${rac1PlublicIP};};
+};
+zone  "`echo $rac1PlublicIP|awk -F '.' '{for(i=NF-1;i>1;i--)printf ("%s.",$i);print $1}'`.in-addr.arpa" {
+	   type slave;
+	   file "${dnsname}.${rac1PlublicIP%.*}";
+	   masters {${rac1PlublicIP};};
+};
+zone  "0.0.127.in-addr.arpa" in {
+	   type slave;       
+	   file "${dnsname}.127.0.0";
+	   masters {${rac1PlublicIP};};
+};
+zone  "." {
+	   type hint;
+	   file "/dev/null";
+};
+include "/etc/named.rfc1912.zones";
+include "/etc/named.root.key";
+EOF
+[ $? -eq 0 ] && echo "写入named.conf文件 - Success" || echo -e "\033[31m写入named.conf----------Failed\033[0m"
+chmod g+w /var/named
+fi
+#########centos6##################################################################
+else
+###########节点1配置
+if [ $nodeNum -eq 1 ];then
+	touch /var/named/chroot/etc/named.conf
+	cat /dev/null >/var/named/chroot/etc/named.conf
+cat <<EOF >>/var/named/chroot/etc/named.conf
+options {
+        directory "/var/named";
+};
+zone "${dnsname}" IN {
+	   type master;
+	   file "db.${dnsname}";
+};
+
+zone  "`echo $rac1PlublicIP|awk -F '.' '{for(i=NF-1;i>1;i--)printf ("%s.",$i);print $1}'`.in-addr.arpa" {
+	   type master;
+	   file "${dnsname}.${rac1PlublicIP%.*}";
+};
+
+zone  "0.0.127.in-addr.arpa" in {
+	   type master;
+	   file "${dnsname}.127.0.0";
+};
+
+zone  "." {
+	   type hint;
+	   file "/dev/null";
+};
+EOF
+[ $? -eq 0 ] && echo "写入named.conf文件 - Success" || echo -e "\033[31m写入named.conf----------Failed\033[0m"
+##生成DNS解析文件
+if [ ! -f "/var/named/chroot/var/named/db.${dnsname}" ];then
+	touch /var/named/chroot/var/named/db.${dnsname}
+else
+   cat /dev/null >/var/named/chroot/var/named/db.${dnsname}
+fi
+
+if [ ! -f "/var/named/chroot/var/named/${dnsname}.${rac1PlublicIP%.*}" ];then
+	touch /var/named/chroot/var/named/${dnsname}.${rac1PlublicIP%.*}
+else
+   cat /dev/null >/var/named/chroot/var/named/${dnsname}.${rac1PlublicIP%.*}
+fi
+
+if [ ! -f "/var/named/chroot/var/named/${dnsname}.127.0.0" ];then
+	touch /var/named/chroot/var/named/${dnsname}.127.0.0
+else
+   cat /dev/null >/var/named/chroot/var/named/${dnsname}.127.0.0
+fi
+cat <<EOF >>/var/named/chroot/var/named/db.${dnsname}
+\$TTL 3d
+${dnsname}. in soa ${rac1HostName}.${dnsname}. root.${dnsname}. (
+								 2015123001;
+								 3h;
+								 1h;
+								 2w
+								 2h)
+${dnsname}.                in NS    ${rac1HostName}.${dnsname}.
+localhost.${dnsname}.     in A     127.0.0.1
+${rac1HostName}.${dnsname}.            in A   ${rac1PlublicIP}
+${rac2HostName}.${dnsname}.            in A   ${rac2PlublicIP}
+${rac1HostName}-vip.${dnsname}.      in A     ${rac1VIP}
+${rac2HostName}-vip.${dnsname}.      in A     ${rac2VIP}
+${scname}.${dnsname}.      in A     ${scanIP1}
+${scname}.${dnsname}.      in A     ${scanIP2}
+${scname}.${dnsname}.      in A     ${scanIP3}
+${rac1HostName}-priv.${dnsname}.     in A     ${rac1PrivIP}
+${rac2HostName}-priv.${dnsname}.     in A     ${rac2PrivIP}
+EOF
+[ $? -eq 0 ] && echo "写入db.${dnsname}文件 - Success" || echo -e "\033[31m写入db.${dnsname}----------Failed\033[0m"
+
+
+cat <<EOF >>/var/named/chroot/var/named/${dnsname}.${rac1PlublicIP%.*}
+\$TTL 3d
+`echo $rac1PlublicIP|awk -F '.' '{for(i=NF-1;i>1;i--)printf ("%s.",$i);print $1}'`.in-addr.arpa. in soa ${rac1HostName}.${dnsname}. root.${dnsname}. (
+								   2015123001;
+								   3h;
+								   2h;
+								   2w
+								   1h)
+`echo $rac1PlublicIP|awk -F '.' '{for(i=NF-1;i>1;i--)printf ("%s.",$i);print $1}'`.in-addr.arpa.      in NS  ${rac1HostName}.${dnsname}.
+`echo $rac1PlublicIP|awk -F '.' '{for(i=NF;i>1;i--)printf ("%s.",$i);print $1}'`.in-addr.arpa.   in PTR ${rac1HostName}.${dnsname}.
+`echo $rac2PlublicIP|awk -F '.' '{for(i=NF;i>1;i--)printf ("%s.",$i);print $1}'`.in-addr.arpa.   in PTR ${rac2HostName}.${dnsname}.
+`echo $rac1VIP|awk -F '.' '{for(i=NF;i>1;i--)printf ("%s.",$i);print $1}'`.in-addr.arpa.   in PTR ${rac1HostName}-vip.${dnsname}.
+`echo $rac2VIP|awk -F '.' '{for(i=NF;i>1;i--)printf ("%s.",$i);print $1}'`.in-addr.arpa.   in PTR ${rac2HostName}-vip.${dnsname}.
+`echo $scanIP1|awk -F '.' '{for(i=NF;i>1;i--)printf ("%s.",$i);print $1}'`.in-addr.arpa.   in PTR ${scname}.${dnsname}.
+`echo $scanIP2|awk -F '.' '{for(i=NF;i>1;i--)printf ("%s.",$i);print $1}'`.in-addr.arpa.   in PTR ${scname}.${dnsname}.
+`echo $scanIP3|awk -F '.' '{for(i=NF;i>1;i--)printf ("%s.",$i);print $1}'`.in-addr.arpa.   in PTR ${scname}.${dnsname}.
+`echo $rac1PrivIP|awk -F '.' '{for(i=NF;i>1;i--)printf ("%s.",$i);print $1}'`.in-addr.arpa.     in PTR ${rac1HostName}-priv.${dnsname}.
+`echo $rac2PrivIP|awk -F '.' '{for(i=NF;i>1;i--)printf ("%s.",$i);print $1}'`.in-addr.arpa.     in PTR ${rac2HostName}-priv.${dnsname}.
+EOF
+[ $? -eq 0 ] && echo "写入${dnsname}.${rac1PlublicIP%.*}文件 - Success" || echo -e "\033[31m写入${dnsname}.${rac1PlublicIP%.*}----------Failed\033[0m"
+
+
+cat <<EOF >>/var/named/chroot/var/named/${dnsname}.127.0.0
+\$TTL 3d
+0.0.127.in-addr.arpa.  in soa ${rac1HostName}.${dnsname}.  root.${dnsname}. (
+										2015123001;
+										3h;
+										2h;
+										2w
+										1h)
+0.0.127.in-addr.arpa.     in NS  ${rac1HostName}.${dnsname}.
+1.0.0.127.in-addr.arpa.   in PTR localhost.${dnsname}.
+
+EOF
+[ $? -eq 0 ] && echo "写入${dnsname}.127.0.0文件 - Success" || echo -e "\033[31m写入${dnsname}.127.0.0----------Failed\033[0m"
+#########节点2配置
+elif [ $nodeNum -eq 2 ];then
+	touch /var/named/chroot/etc/named.conf
+	cat /dev/null >/var/named/chroot/etc/named.conf
+cat <<EOF >>/var/named/chroot/etc/named.conf
+options {
+        directory "/var/named";
+};
+zone "${dnsname}" IN {
+	   type slave;
+	   file "db.${dnsname}";
+	   masters {${rac1PlublicIP};};
+};
+zone  "`echo $rac1PlublicIP|awk -F '.' '{for(i=NF-1;i>1;i--)printf ("%s.",$i);print $1}'`.in-addr.arpa" {
+	   type slave;
+	   file "${dnsname}.${rac1PlublicIP%.*}";
+	   masters {${rac1PlublicIP};};
+};
+zone  "0.0.127.in-addr.arpa" in {
+	   type slave;       
+	   file "${dnsname}.127.0.0";
+	   masters {${rac1PlublicIP};};
+};
+zone  "." {
+	   type hint;
+	   file "/dev/null";
+};
+EOF
+[ $? -eq 0 ] && echo "写入named.conf文件 - Success" || echo -e "\033[31m写入named.conf----------Failed\033[0m"
+chmod g+w /var/named
+fi
+
+fi
+#################
+grep 666666 /etc/resolv.conf
+if [ $? -eq 0 ]; then
+	cp /etc/resolv.conf.666666 /etc/resolv.conf
+else
+	cp /etc/resolv.conf /etc/resolv.conf.666666
+fi
+cat <<EOF >>/etc/resolv.conf
+#add by 666666
+domain ${dnsname}
+nameserver ${rac1PlublicIP}
+nameserver ${rac2PlublicIP}
+options rotate
+options timeout:2
+options attempts:5
+EOF
+[ $? -eq 0 ] && echo "写入resolv.conf文件 - Success" || echo -e "\033[31m写入resolv.conf----------Failed\033[0m"   
+
+rpm -q binutils compat-libcap1 compat-libstdc++-33 gcc gcc-c++ glibc glibc-devel ksh libaio libaio-devel libgcc libstdc++ libstdc++-devel libXi libXtst make sysstat unixODBC unixODBC-devel smartmontools readline| grep "not installed"
+
+

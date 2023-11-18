@@ -1,0 +1,7 @@
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: vpn-nfs-sc
+provisioner: fuseim.pri/ifs  # 很关键，必须与 Pod 的环境变量PROVISIONER_NAME 匹配上
+parameters:
+  archiveOnDelete: "false"

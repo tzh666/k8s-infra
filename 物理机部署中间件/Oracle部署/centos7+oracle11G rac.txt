@@ -1,0 +1,518 @@
+centos7 oracle 11g R2 RAC 安装教程
+
+1.虚拟机安装
+安装系统界面按tab键 输入：net.ifnames=0 biosdevname=0 然后回车
+
+2.网卡设置
+节点1
+192.168.31.65 外网
+172.168.1.10 内网
+rac1-vip :192.168.31.67
+
+节点2
+192.168.31.66 外网
+172.168.1.11 内网
+rac2-vip :192.168.31.68
+
+rac-scan : 192.168.31.69  192.168.31.70  192.168.31.71
+
+3.复制一台新的虚拟机
+4.安装环境配置(通过shell脚本来配置 rac_install.txt)
+
+5.安装GRID字段的CVU的RPM包
+ rpm -ivh /soft/grid/rpm/cvuqdisk-1.0.9-1.rpm
+
+6.DNS解析配置
+dnssec-lookaside auto;
+server端： IP：192.168.31.65    hostname：rac1
+
+第一步配置named.conf
+#cd /var/named/chroot/etc/
+vi /etc/named.conf
+
+zone "oracle.org" IN {
+       type master;
+       file "db.oracle.org";
+};
+
+zone  "31.168.192.in-addr.arpa" {
+       type master;
+       file "oracle.org.192.168.31";
+};
+
+zone  "0.0.127.in-addr.arpa" in {
+       type master;
+       file "oracle.org.127.0.0";
+};
+
+zone  "." {
+       type hint;
+       file "/dev/null";
+};
+
+第二步配置zone：
+# cd /var/named
+-----------------------------------------------------------------------
+vi db.oracle.org
+
+$TTL 3d
+oracle.org. in soa rac1.oracle.org. root.oracle.org. (
+                                 2015123001;
+                                 3h;
+                                 1h;
+                                 2w
+                                 2h)
+oracle.org.                in NS    rac1.oracle.org.
+localhost.oracle.org.     in A     127.0.0.1
+rac1.oracle.org.            in A     192.168.31.65
+rac2.oracle.org.            in A     192.168.31.66
+rac1-vip.oracle.org.      in A     192.168.31.67
+rac2-vip.oracle.org.      in A     192.168.31.68
+rac-scan.oracle.org.      in A     192.168.31.69
+rac-scan.oracle.org.      in A     192.168.31.70
+rac-scan.oracle.org.      in A     192.168.31.71
+----------------------------------------------------------------------
+vi oracle.org.192.168.31
+
+$TTL 3d
+31.168.192.in-addr.arpa. in soa rac1.oracle.org. root.oracle.org. (
+                                   2015123001;
+                                   3h;
+                                   2h;
+                                   2w
+                                   1h)
+31.168.192.in-addr.arpa.      in NS  rac1.oracle.org.
+65.31.168.192.in-addr.arpa.   in PTR rac1.oracle.org.
+66.31.168.192.in-addr.arpa.   in PTR rac2.oracle.org.
+67.31.168.192.in-addr.arpa.   in PTR rac1-vip.oracle.org.
+68.31.168.192.in-addr.arpa.   in PTR rac2-vip.oracle.org.
+69.31.168.192.in-addr.arpa.   in PTR rac-scan.oracle.org.
+70.31.168.192.in-addr.arpa.   in PTR rac-scan.oracle.org.
+71.31.168.192.in-addr.arpa.   in PTR rac-scan.oracle.org.
+
+----------------------------------------------------------------------
+vi oracle.org.127.0.0
+
+$TTL 3d
+0.0.127.in-addr.arpa.  in soa rac1.oracle.org.  root.oracle.org. (
+                                        2015123001;
+                                        3h;
+                                        2h;
+                                        2w
+                                        1h)
+0.0.127.in-addr.arpa.     in NS  rac1.oracle.org.
+1.0.0.127.in-addr.arpa.   in PTR localhost.oracle.org.
+
+-------------------------------------------------------------------------
+
+客户端：
+vi /etc/named.conf
+
+zone "oracle.org" IN {
+       type slave;
+       file "db.oracle.org";
+       masters {192.168.31.65;};
+};
+
+zone  "31.168.192.in-addr.arpa" {
+       type slave;
+       file "oracle.org.192.168.31";
+       masters {192.168.31.65;};
+};
+
+zone  "0.0.127.in-addr.arpa" in {
+       type slave;       
+       file "oracle.org.127.0.0";
+       masters {192.168.31.65;};
+};
+
+zone  "." {
+       type hint;
+       file "/dev/null";
+};
+
+chmod  g+w /var/named
+
+两个节点都要改
+vi /etc/resolv.conf
+
+domain oracle.org
+nameserver 192.168.31.65
+nameserver 192.168.31.66
+options rotate
+options timeout:2
+options attempts:5
+
+
+
+
+在master端启动服务：systemctl start named.service
+
+
+在slave端启动服务：systemctl start named.service
+
+nslookup rac1
+nslookup rac2
+nslookup rac1-vip
+nslookup rac2-vip
+nslookup rac-scan
+
+查看slave  /var/named 下面是否生成三个文件
+
+
+全部检查没问题设置服务开机启动
+
+systemctl enable named.service
+
+7.ssh信任关系配置
+mount -r -o uid=grid,gid=oinstall /dev/cdrom /soft
+-- SSH配置 (自root用户下执行)
+-- Oracle 用户
+
+/soft/grid/sshsetup/sshUserSetup.sh -user oracle -hosts 'rac1 rac2 rac1-priv rac2-priv' -advanced
+此处的密码都是oracle
+
+-- grid用户 
+/soft/grid/sshsetup/sshUserSetup.sh -user grid -hosts 'rac1 rac2 rac1-priv rac2-priv' -advanced
+此处的密码是grid
+
+
+8.安装前环境检查
+su - grid
+/soft/grid/runcluvfy.sh stage -pre crsinst -n rac1,rac2 -verbose -fixup
+
+
+9.添加共享磁盘，UDEV 配置共享存储
+
+
+创建5块盘 3块5G 的用来做裁决盘 2个10的存储数据
+Windows下找到命令行模式进入VBOX安装目录 
+VBoxManage.exe createhd -filename "D:\虚拟机\share\ocr1.vdi" -size 5120 -format VDI -variant Fixed
+VBoxManage.exe createhd -filename "D:\虚拟机\share\ocr2.vdi" -size 5120 -format VDI -variant Fixed
+VBoxManage.exe createhd -filename "D:\虚拟机\share\ocr3.vdi" -size 5120 -format VDI -variant Fixed
+
+VBoxManage.exe createhd -filename "D:\虚拟机\share\data1.vdi" -size 10240 -format VDI -variant Fixed
+VBoxManage.exe createhd -filename "D:\虚拟机\share\data2.vdi" -size 10240 -format VDI -variant Fixed
+
+
+通过脚本来配置UDEV(只适用于7)
+我一共加了5块盘 b c d e f 
+
+for i in b c d e f;
+do
+echo "KERNEL==\"sd*\", ENV{DEVTYPE}==\"disk\", SUBSYSTEM==\"block\", PROGRAM==\"/usr/lib/udev/scsi_id -g -u -d \$devnode\", RESULT==\"`/usr/lib/udev/scsi_id -g -u /dev/sd$i`\", RUN+=\"/bin/sh -c 'mknod /dev/asmdisk$i b \$major \$minor; chown grid:asmadmin /dev/asmdisk$i; chmod 0660 /dev/asmdisk$i'\""  >>/etc/udev/rules.d/99-oracle-asmdevices.rules
+done
+
+/sbin/udevadm trigger --type=devices --action=change
+ll /dev/asm*
+
+共享存储配置成功
+
+
+10.修改grid_install.rsp响应文件安装，开始安装 GRID软件
+此处的响应文件我已经修改好,根据实际情况进行修改
+
+安装GRID
+
+oracle.install.responseFileVersion=/oracle/install/rspfmt_crsinstall_response_schema_v11_2_0
+# 修改1：当前安装节点的计算机名称----------------------------------------------(重点注意1)
+ORACLE_HOSTNAME=rac1
+# 修改2：版本信息路径（路径相关可以不修改）
+INVENTORY_LOCATION=/u01/app/oraInventory
+# 修改3：语言，多选用,隔开（正常来说保持默认即可）
+SELECTED_LANGUAGES=en,zh_CN
+#4个选项提供，表示要做的操作
+#   - CRS_CONFIG : To configure Grid Infrastructure for cluster
+#   - HA_CONFIG  : To configure Grid Infrastructure for stand alone server
+#   - UPGRADE    : To upgrade clusterware software of earlier release
+#   - CRS_SWONLY : To install clusterware files only (can be configured for cluster
+#                or stand alone server later)
+oracle.install.option=CRS_CONFIG
+# 修改4：grid 的 BASE 和 HOME 目录（路径相关可以不修改）
+ORACLE_BASE=/u01/app/grid
+ORACLE_HOME=/u01/app/11.2.0/grid
+oracle.install.asm.OSDBA=asmdba
+oracle.install.asm.OSOPER=asmoper
+oracle.install.asm.OSASM=asmadmin
+# 修改5：scan名称，和hosts对应--------------------------------------------------（重点注意2）
+oracle.install.crs.config.gpnp.scanName=rac-scan
+# 修改6：集群监听端口号---------------------------------------------------------（重点注意3）
+oracle.install.crs.config.gpnp.scanPort=1521
+# 修改7：cluster名称，可以保持默认
+oracle.install.crs.config.clusterName=rac
+#configureGNS为false，表示不配置GNS
+#autoConfigureClusterNodeVIP这个参数为配置GNS后续参数之一，如果不开启GNS，这里指定false
+oracle.install.crs.config.gpnp.configureGNS=false
+oracle.install.crs.config.gpnp.gnsSubDomain=
+oracle.install.crs.config.gpnp.gnsVIPAddress=
+oracle.install.crs.config.autoConfigureClusterNodeVIP=false
+# 修改8：节点信息，跟hosts对应---------------------------------------------------（重点注意4）
+oracle.install.crs.config.clusterNodes=rac1:rac1-vip,rac2:rac2-vip
+# 修改9：网卡信息和网段，对应ifconfig结果（两个节192.168.31.0:1,eth1:172.168.1.0:2
+# 存储形式，使用ASM的话保持默认即可（可以不修改）,2个值提供
+#   - ASM_STORAGE
+#   - FILE_SYSTEM_STORAGE
+oracle.install.crs.config.storageOption=ASM_STORAGE
+#这项只和windows有关，空着吧
+oracle.install.crs.config.sharedFileSystemStorage.diskDriveMapping=
+oracle.install.crs.config.sharedFileSystemStorage.votingDiskLocations=
+oracle.install.crs.config.sharedFileSystemStorage.votingDiskRedundancy=NORMAL
+oracle.install.crs.config.sharedFileSystemStorage.ocrLocations=
+oracle.install.crs.config.sharedFileSystemStorage.ocrRedundancy=NORMAL
+oracle.install.crs.config.useIPMI=false
+oracle.install.crs.config.ipmi.bmcUsername=
+oracle.install.crs.config.ipmi.bmcPassword=
+# SYS密码
+oracle.install.asm.SYSASMPassword=oracle
+# 修改10：表决盘名称（可以不修改）
+oracle.install.asm.diskGroup.name=OCR
+# 修改11：表决盘冗余选项（接受以下3个选项）-----------------------------------------（重点注意6）
+# HIGH            高冗余：最少5块磁盘，Oracle ASM默认提供三重镜像。可以容忍在不同故障组中丢失两个Oracle ASM磁盘。
+# NORMAL        正常冗余：最少3块磁盘，Oracle ASM默认提供双向镜像，这意味着镜像所有文件，以便每个范围有两个副本。容许丢失一个磁盘。
+# EXTERNAL        外部冗余：最少1块盘，由外部RAID提供冗余。
+oracle.install.asm.diskGroup.redundancy=NORMAL   我加了三块裁决盘此处选NORMAL 
+oracle.install.asm.diskGroup.AUSize=1
+# 修改12：表决盘所使用的裸盘，根据需要修改------------------------------------------（重点注意7）
+oracle.install.asm.diskGroup.disks=/dev/asmdiskb,/dev/asmdiskc,/dev/asmdiskd  对应三块盘的名称
+oracle.install.asm.diskGroup.diskDiscoveryString=/dev/asm*
+# ASMSNMP密码
+oracle.install.asm.monitorPassword=oracle
+oracle.install.crs.upgrade.clusterNodes=
+oracle.install.asm.upgradeASM=false
+oracle.installer.autoupdates.option=SKIP_UPDATES
+oracle.installer.autoupdates.downloadUpdatesLoc=
+AUTOUPDATES_MYORACLESUPPORT_USERNAME=
+AUTOUPDATES_MYORACLESUPPORT_PASSWORD=
+PROXY_HOST=
+PROXY_PORT=0
+PROXY_USER=
+PROXY_PWD=
+PROXY_REALM=
+cat grid_install.rsp | grep -v ^# | grep -v ^$
+-- 节点1切换到grid用户
+
+/soft/grid/runInstaller -showProgress -silent -responseFile /soft/grid_install.rsp
+
+centos 7 安装Oracle 11G 的RAC 有一下BUG 导致安装报错，在一会执行root.sh之前需要打个补丁  需要用 GRID自带的 OPatch命令打18370031 这个补丁
+10.在执行root脚本前需要打个补丁
+
+节点1和节点2补丁安装成功
+p18370031_112040_Linux-x86-64.zip
+unzip p18370031_112040_Linux-x86-64.zip
+
+cd /soft/18370031 
+/u01/app/11.2.0/grid/OPatch/opatch apply
+
+
+
+OPatch/opath apply
+
+	1. /u01/app/oraInventory/orainstRoot.sh
+	2. /u01/app/11.2.0/grid/root.sh
+
+
+- 节点1执行成功，接下来执行节点2 节点2执行成功
+
+节点一创建一个文件执行第三个脚本（只需要在安装节点执行即可）
+vi  /home/grid/cfgrsp.properties
+
+oracle.assistants.asm|S_ASMPASSWORD=oracle
+oracle.assistants.asm|S_ASMMONITORPASSWORD=oracle
+
+grid软件安装完毕
+
+#创建磁盘组用于存储数据文件
+-- 节点1执行
+su - grid
+sqlplus / as sysasm
+
+SELECT NAME,state FROM v$asm_diskgroup;
+
+create diskgroup DATAVG external redundancy disk '/dev/asmdiske','/dev/asmdiskf';
+set linesize 300；
+select NAME,TOTAL_MB/1024 "TOTAL/G",FREE_MB/1024 "FREE/G",round(FREE_MB/TOTAL_MB*100)||'%' Per_Free,state from v$asm_diskgroup
+!crsctl stat res -t
+-- 节点1创建磁盘组之后需要在节点把磁盘组启动一下
+#srvctl start diskgroup -g DATAVG -n rac2 
+alter diskgroup DATAVG mount; 
+
+crsctl stat res -t
+在节点一通过命令行模式添加磁盘组DATAVG之后需要在节点2上mount一下；
+alter diskgroup DATAVG mount; 
+#安装监听
+#netca -silent -responsefile $ORACLE_HOME/assistants/netca/netca.rsp
+#su - grid
+
+#srvctl add listener
+#srvctl start listener
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+通过命令行添加磁盘组之后需要再节点2mount一下
+11.开始安装数据库
+先挂载数据库的安装光盘
+
+配置rdbms响应文件
+#安装rdbms
+#编辑rsp文件
+oracle.install.responseFileVersion=/oracle/install/rspfmt_dbinstall_response_schema_v11_2_0
+#安装选项，3个值可选
+#   - INSTALL_DB_SWONLY   #只安装rdbms
+#   - INSTALL_DB_AND_CONFIG  #安装rdbms和instance
+#   - UPGRADE_DB           #升级安装
+oracle.install.option=INSTALL_DB_SWONLY
+#指定当前安装节点的主机名
+ORACLE_HOSTNAME=rac1
+UNIX_GROUP_NAME=oinstall
+#指定日志路径
+INVENTORY_LOCATION=/u01/app/oracle/oraInventory
+#指定语言，en   : English,zh_CN: Simplified Chinese。多个语言用逗号分隔
+SELECTED_LANGUAGES=en
+ORACLE_HOME=/u01/app/oracle/product/11.2.0/db
+ORACLE_BASE=/u01/app/oracle
+#指定安装的版本，4个值可选
+#   - EE     : Enterprise Edition                                
+#   - SE     : Standard Edition                                  
+#   - SEONE  : Standard Edition One
+#   - PE     : Personal Edition (WINDOWS ONLY)
+oracle.install.db.InstallEdition=EE
+oracle.install.db.EEOptionsSelection=false
+oracle.install.db.optionalComponents=
+#指定组权限
+oracle.install.db.DBA_GROUP=dba
+oracle.install.db.OPER_GROUP=oper
+#指定节点名称，一般使用主机名
+oracle.install.db.CLUSTER_NODES=rac1,rac2
+#是否安装rac一个节点
+#   - true  : Value of RAC One Node service name is used.
+#   - false : Value of RAC One Node service name is not used.
+oracle.install.db.isRACOneInstall=false
+oracle.install.db.racOneServiceName=
+#指定创建的数据库的类型
+#   - GENERAL_PURPOSE/TRANSACTION_PROCESSING             
+#   - DATA_WAREHOUSE   
+oracle.install.db.config.starterdb.type=GENERAL_PURPOSE
+#指定实例的参数，但是我们只安装rdbms，这里不指定
+oracle.install.db.config.starterdb.globalDBName=
+oracle.install.db.config.starterdb.SID=
+oracle.install.db.config.starterdb.characterSet=
+oracle.install.db.config.starterdb.memoryOption=false
+oracle.install.db.config.starterdb.memoryLimit=
+oracle.install.db.config.starterdb.installExampleSchemas=false
+oracle.install.db.config.starterdb.enableSecuritySettings=true
+oracle.install.db.config.starterdb.password.ALL=
+oracle.install.db.config.starterdb.password.SYS=
+oracle.install.db.config.starterdb.password.SYSTEM=
+oracle.install.db.config.starterdb.password.SYSMAN=
+oracle.install.db.config.starterdb.password.DBSNMP=
+oracle.install.db.config.starterdb.control=DB_CONTROL
+oracle.install.db.config.starterdb.gridcontrol.gridControlServiceURL=
+oracle.install.db.config.starterdb.automatedBackup.enable=false
+oracle.install.db.config.starterdb.automatedBackup.osuid=
+oracle.install.db.config.starterdb.automatedBackup.ospwd=
+oracle.install.db.config.starterdb.storageType=
+oracle.install.db.config.starterdb.fileSystemStorage.dataLocation=
+oracle.install.db.config.starterdb.fileSystemStorage.recoveryLocation=
+oracle.install.db.config.asm.diskGroup=
+oracle.install.db.config.asm.ASMSNMPPassword=
+#指定oracle support的用户名和密码
+MYORACLESUPPORT_USERNAME=
+MYORACLESUPPORT_PASSWORD=
+SECURITY_UPDATES_VIA_MYORACLESUPPORT=false
+#指定是否不配置安装更新
+DECLINE_SECURITY_UPDATES=true
+PROXY_HOST=
+PROXY_PORT=
+PROXY_USER=
+PROXY_PWD=
+PROXY_REALM=
+COLLECTOR_SUPPORTHUB_URL=
+oracle.installer.autoupdates.option=SKIP_UPDATES
+oracle.installer.autoupdates.downloadUpdatesLoc=
+AUTOUPDATES_MYORACLESUPPORT_USERNAME=
+AUTOUPDATES_MYORACLESUPPORT_PASSWORD=
+
+#编译好的文件
+oracle.install.responseFileVersion=/oracle/install/rspfmt_dbinstall_response_schema_v11_2_0
+oracle.install.option=INSTALL_DB_SWONLY
+ORACLE_HOSTNAME=rac1
+UNIX_GROUP_NAME=oinstall
+INVENTORY_LOCATION=/u01/app/oracle/oraInventory
+SELECTED_LANGUAGES=en
+ORACLE_HOME=/u01/app/oracle/product/11.2.0/db
+ORACLE_BASE=/u01/app/oracle
+oracle.install.db.InstallEdition=EE
+oracle.install.db.EEOptionsSelection=false
+oracle.install.db.optionalComponents=
+oracle.install.db.DBA_GROUP=dba
+oracle.install.db.OPER_GROUP=oper
+oracle.install.db.CLUSTER_NODES=rac1,rac2
+oracle.install.db.isRACOneInstall=false
+oracle.install.db.racOneServiceName=
+oracle.install.db.config.starterdb.type=GENERAL_PURPOSE
+oracle.install.db.config.starterdb.globalDBName=
+oracle.install.db.config.starterdb.SID=
+oracle.install.db.config.starterdb.characterSet=
+oracle.install.db.config.starterdb.memoryOption=false
+oracle.install.db.config.starterdb.memoryLimit=
+oracle.install.db.config.starterdb.installExampleSchemas=false
+oracle.install.db.config.starterdb.enableSecuritySettings=true
+oracle.install.db.config.starterdb.password.ALL=
+oracle.install.db.config.starterdb.password.SYS=
+oracle.install.db.config.starterdb.password.SYSTEM=
+oracle.install.db.config.starterdb.password.SYSMAN=
+oracle.install.db.config.starterdb.password.DBSNMP=
+oracle.install.db.config.starterdb.control=DB_CONTROL
+oracle.install.db.config.starterdb.gridcontrol.gridControlServiceURL=
+oracle.install.db.config.starterdb.automatedBackup.enable=false
+oracle.install.db.config.starterdb.automatedBackup.osuid=
+oracle.install.db.config.starterdb.automatedBackup.ospwd=
+oracle.install.db.config.starterdb.storageType=
+oracle.install.db.config.starterdb.fileSystemStorage.dataLocation=
+oracle.install.db.config.starterdb.fileSystemStorage.recoveryLocation=
+oracle.install.db.config.asm.diskGroup=
+oracle.install.db.config.asm.ASMSNMPPassword=
+MYORACLESUPPORT_USERNAME=
+MYORACLESUPPORT_PASSWORD=
+SECURITY_UPDATES_VIA_MYORACLESUPPORT=false
+DECLINE_SECURITY_UPDATES=true
+PROXY_HOST=
+PROXY_PORT=
+PROXY_USER=
+PROXY_PWD=
+PROXY_REALM=
+COLLECTOR_SUPPORTHUB_URL=
+oracle.installer.autoupdates.option=SKIP_UPDATES
+oracle.installer.autoupdates.downloadUpdatesLoc=
+AUTOUPDATES_MYORACLESUPPORT_USERNAME=
+AUTOUPDATES_MYORACLESUPPORT_PASSWORD=
+
+此处的db_install文件我已经修改好了，可以直接使用
+#在安装rdbms前，需要编辑一个脚本，因为oracle11G在linux7上面安装有bug
+
+vi edit_emagent.sh
+#/bin/bash
+[ -f ~/.bash_profile ]&& . ~/.bash_profile
+while true
+do
+    if [ -f $ORACLE_HOME/sysman/lib/ins_emagent.mk ];then
+        sed -i 's/$(MK_EMAGENT_NMECTL)/$(MK_EMAGENT_NMECTL)-lnnz11/g' $ORACLE_HOME/sysman/lib/ins_emagent.mk
+        break
+    fi
+done
+
+bash edit_emagent.sh 如果不执行这个shell脚本在大概百分之70多的时候图形化界面安装回报错
+mount -r -o uid=oracle,gid=oinstall /dev/cdrom /mnt
+/soft/database/runInstaller -silent -showProgress -ignoreSysPrereqs -ignorePrereq -responseFile /soft/db_install.rsp
+
+最后一步建库
+安装一个sqlplus下面的插件rlwarp
+数据库安装完毕
+alias sqlplus='rlwrap sqlplus'
+alias  rman='rlwrap rman'
+alias lsnrctl='lsnrctl rman'
+alias asmcmd='rlwrap asmcmd'
+
+dbca -silent -createDatabase -templateName General_Purpose.dbc -gdbname orcl  -sid orcl -sysPassword oracle -systemPassword oracle -datafileDestination '+DATAVG' -redoLogFileSize 50  -storageType ASM -asmsnmpPassword oracle  -diskGroupName 'DATAVG' -responseFile NO_VALUE -characterset AL32UTF8 -nationalCharacterSet UTF8 -sampleSchema true -automaticMemoryManagement true -totalMemory 1000  -nodeinfo rac1,rac2
+
+
+dbca -silent -createDatabase -templateName General_Purpose.dbc -gdbname racdb  -sid racdb -sysPassword oracle -systemPassword oracle -datafileDestination '+DATADG1' -redoLogFileSize 50 -recoveryAreaDestination '+FRADG' -storageType ASM -asmsnmpPassword oracle  -diskGroupName 'DATADG1' -responseFile NO_VALUE -characterset AL32UTF8 -nationalCharacterSet AL16UTF16 -sampleSchema true -automaticMemoryManagement true -totalMemory 800  -nodeinfo racdb1,racdb2

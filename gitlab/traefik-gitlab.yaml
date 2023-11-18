@@ -1,0 +1,14 @@
+apiVersion: traefik.containo.us/v1alpha1
+kind: IngressRoute
+metadata:
+  name: gitlab
+  namespace: kube-ops
+spec:
+  entryPoints:
+  - web
+  routes:
+  - kind: Rule
+    match: Host(`git.k8s.local`)
+    services:
+    - name: gitlab
+      port: 80
