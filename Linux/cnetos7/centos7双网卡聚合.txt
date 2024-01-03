@@ -1,0 +1,56 @@
+## centos7
+cd /etc/sysconfig/network-scripts
+cat > ifcfg-eth100 << EOF
+TYPE="bond"
+BOOTPROTO="none"
+DEFROUTE="yes"
+IPV4_FAILURE_FATAL="no"
+IPV6INIT="no"
+IPV6_AUTOCONF="no"
+IPV6_DEFROUTE="no"
+IPV6_FAILURE_FATAL="no"
+IPV6_ADDR_GEN_MODE="stable-privacy"
+NAME="eth100"
+DEVICE="eth100"
+ONBOOT="yes"
+IPADDR="10.1.4.100"
+PREFIX="24"
+GATEWAY="10.1.4.100"
+DNS1="8.8.8.8"
+DNS2="114.114.114.114"
+IPV6_PEERDNS="no"
+IPV6_PEERROUTES="no"
+IPV6_PRIVACY="no"
+## balance-rr (mode=0) 默认,有高可用和负载均衡的功能,需要交换机的配置,每块网卡轮询发包,流量分发比较均衡
+## active-backup (mode=1) 只有高可用功能,不需要交换机配置,这种模式只有一块网卡工作,对外只有一个mac地址
+## balance-xor (mode=2) 不常用
+## broadcast (mode=3) 不常用
+## 802.3ad (mode=4) 动态链路聚合,需要交换机配置
+## balance-tlb (mode=5) 不常用
+## balance-alb (mode=6) 有高可用和负载均衡的功能,不需要交换机配置,流量分发到每个接口不是特别均衡
+BONDING_OPTS="mode=6 miimon=100"
+EOF
+
+cat > ifcfg-em1 << EOF
+TYPE="Ethernet"
+BOOTPROTO="none"
+DEVICE="em1"
+MASTER="eth100"
+SLAVE="yes"
+ONBOOT="yes"
+EOF
+
+cat > ifcfg-em2 << EOF
+TYPE="Ethernet"
+BOOTPROTO="none"
+DEVICE="em2"
+MASTER="eth100"
+SLAVE="yes"
+ONBOOT="yes"
+EOF
+
+# 重启网络
+service network restart
+
+# 查看绑定状态
+cat /proc/net/bonding/eth100
