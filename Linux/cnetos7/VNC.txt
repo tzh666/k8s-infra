@@ -1,0 +1,25 @@
+1.安装VNC 并复制配置文件
+yum groupinstall "GNOME Desktop" "Desktop" "X Window System"
+yum install tigervnc-server tigervnc vnc-server vnc
+cp /lib/systemd/system/vncserver@.server /etc/systemd/system/vncserver@:1.server
+
+2.修改配置文件并设置VNC远程密码
+vi /etc/systemd/system/vncserver@:1.server
+#修改配置文件里面的execstart   和  pidfile
+vncpasswd
+输入密码确认后选  N
+vi /etc/libvirt/qemu.conf
+#修改其中的 vnc_password=你的vnc远程密码 和 vnc_listen=0.0.0.0
+
+3.重新加载systemd 和 启动（设置开机启动）vnc 服务
+systemctl daemon-reload             #重新加载所有修改过的配置
+systemctl enable vncservice@:1.server
+sysetmctl start vncservice@:1.server
+
+4.关闭防火墙（不关闭就要配置下）
+systemctl stop firewalld
+或者开启防火墙并添加规则
+firewall-cmd --permanent --add-service vnc-server
+systemctl restart firewalld.server
+
+#最后在windows 电脑上安装vnc 连接  用 ip::端口号
