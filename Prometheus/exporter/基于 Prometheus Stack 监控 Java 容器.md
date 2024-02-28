@@ -205,3 +205,40 @@ spec:
         message: "ns:{{ $labels.namespace }} pod:{{ $labels.pod }} rss内存使用率大于85%，当前值({{ $value }}%)"
 ```
 
+
+
+- 踩坑
+
+```yaml
+# https://blog.csdn.net/qq_34468174/article/details/123084653
+
+#增加prometheus-k8s用户权限
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: prometheus-k8s
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - nodes/metrics
+      - services
+      - nodes
+      - endpoints
+      - pods
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - ""
+    resources:
+      - configmaps
+    verbs:
+      - get
+  - nonResourceURLs:
+      - /metrics
+    verbs:
+      - get
+```
+
