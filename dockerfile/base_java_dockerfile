@@ -2,6 +2,8 @@ FROM alpine:3.16
 
 # 时区、dns问题
 
+
+# -jre
 RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.tuna.tsinghua.edu.cn/g' /etc/apk/repositories \
     && apk update \
     && apk add --no-cache tzdata \
@@ -10,5 +12,5 @@ RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.tuna.tsinghua.edu.cn/g' /etc/apk/re
     && wget https://slink.ltd/https://github.com/sgerrand/alpine-pkg-glibc/releases/download/2.29-r0/glibc-2.29-r0.apk \
     && apk add --allow-untrusted --force-overwrite glibc-2.29-r0.apk \
     && rm -rf glibc-2.29-r0.apk \
-    && apk add openjdk8-jre
+    && apk add openjdk8
 
